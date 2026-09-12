@@ -649,3 +649,233 @@ tr:last-child td {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Conversations inbox
+   ---------------------------------------------------------------------------
+   Two panes: who is waiting, and what they said. The waiting time is the
+   loudest thing in the list on purpose — an inbox that does not make waiting
+   visible is a list nobody triages.
+   --------------------------------------------------------------------------- */
+
+.nav-badge {
+  float: right;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.inbox {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) 1fr;
+  gap: var(--gap);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .inbox {
+    grid-template-columns: 1fr;
+  }
+}
+
+.inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.inbox-empty {
+  padding: 16px;
+}
+
+.inbox-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 12px 14px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.inbox-row:hover {
+  background: var(--surface-raised);
+}
+
+.inbox-row.is-open {
+  background: var(--surface-raised);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.inbox-who {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.inbox-preview {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 420px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.thread-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.thread-head p {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+
+.thread-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.bubble {
+  max-width: 70%;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  font-size: 14px;
+}
+
+.bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.bubble footer {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+/* Inbound left, outbound right — the arrangement every messaging app uses, so
+   nobody has to learn this one. */
+.bubble-in {
+  align-self: flex-start;
+  background: var(--surface-raised);
+  border-bottom-left-radius: 2px;
+}
+
+.bubble-out {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--accent-text);
+  border-bottom-right-radius: 2px;
+}
+
+.bubble-out footer {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.thread-reply {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.thread-reply textarea {
+  flex: 1;
+  resize: vertical;
+}
+
+.thread-note {
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------------------
+   Settings
+   --------------------------------------------------------------------------- */
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.form-grid h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 14px;
+}
+
+.notice {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: rgba(47, 191, 113, 0.12);
+  border: 1px solid var(--ok);
+  color: var(--ok);
+  font-size: 14px;
+}
+
+/* Meta's rejection reason, shown verbatim next to the template it refused —
+   the only text that says how to fix it. */
+.error-inline {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.secondary {
+  background: var(--surface-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.secondary:hover:not(:disabled) {
+  background: var(--border);
+}

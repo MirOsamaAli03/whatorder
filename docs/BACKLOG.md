@@ -48,25 +48,6 @@ are covered, and menu structure changes rarely.
 
 ## Open — new in Phase 6 (WhatsApp ordering)
 
-### B-24. No inbox for handed-off conversations
-
-**Phase:** 6 · **Status:** the handoff works, the other end does not
-
-A customer who asks for a person gets told somebody will reply, and the bot
-correctly goes silent. Nothing then shows that conversation to the restaurant:
-there is no inbox screen, no alert, and no way to reply from the dashboard or to
-end the handoff and give the conversation back to the bot.
-
-So today the promise "somebody will reply here shortly" is only true if a member
-of staff happens to be watching the WhatsApp Business app on the same number —
-which, after the number migration in B-22, they may not be. **This is the most
-consequential gap in the phase**: it is a promise made to a customer that the
-software does not keep.
-
-**Needs:** a conversations screen listing sessions in HUMAN_HANDOFF, a reply box
-posting through WhatsAppSenderService, an escalation-style alert when one goes
-unanswered, and a control returning the session to IDLE.
-
 ### B-25. A multi-branch tenant on one number picks the first branch
 
 **Phase:** 6 · **Status:** narrow, but wrong when it happens
@@ -168,6 +149,59 @@ classifies its own failures. A real BSP returns dozens of error codes, and
 misclassifying a permanent one as retryable wastes six attempts while
 misclassifying a transient one loses a message. The mapping can only be written
 against a real provider's documentation.
+
+---
+
+## Closed in the pilot-readiness pass
+
+### B-24. Inbox for handed-off conversations — **closed**
+
+**Phase:** 6 · **Closed by:** the pilot-readiness pass
+
+A conversations screen lists everyone waiting, longest first, with the waiting
+time as the loudest thing on the row and a count badge in the navigation so
+nobody has to keep the tab open. Staff can read the thread, reply over the same
+number the bot uses, and hand the conversation back to the bot. The reply box
+respects WhatsApp's 24-hour window and says why when it cannot be used, rather
+than letting somebody type a paragraph and have it refused.
+
+Six browser tests cover it against the real stack. One follow-up remains, split
+out as B-28: nothing yet reaches a phone when a handoff goes unanswered.
+
+### B-21. Notification settings screen — **closed**
+
+**Phase:** 5 · **Closed by:** the pilot-readiness pass
+
+Settings now covers connecting a WhatsApp number, activating and deactivating
+one, the notification-channel grid, and the template list with approval status.
+A rejected or paused template is called out at the top of the page with Meta's
+own reason next to the template, because it is the likeliest reason a
+restaurant's customers quietly stop hearing from them and it fails silently
+everywhere else. Credentials are write-only and never rendered.
+
+### B-22. Number migration guidance — **closed**
+
+**Phase:** 5 · **Closed by:** the pilot-readiness pass
+
+[WHATSAPP_ONBOARDING.md](./WHATSAPP_ONBOARDING.md) covers the objection in full
+— a number cannot be in the WhatsApp Business app and the API at once, the chat
+history does not transfer, and the two honest options — plus what Meta requires,
+the 24-hour window and why templates are the long pole, how to connect a number,
+what to check when nothing arrives, the limitations that stand at pilot, and a
+go-live checklist.
+
+### B-28. An unanswered handoff does not reach a phone
+
+**Phase:** 6 · **Status:** new, split from B-24
+
+The inbox makes a waiting customer visible to anyone looking at the dashboard,
+and the navigation badge makes it visible from any screen. It still depends on
+somebody having the dashboard open. An unacknowledged *order* escalates through
+a ladder; an unanswered *customer* does not.
+
+**Needs:** the escalation monitor to sweep conversations in HUMAN_HANDOFF past a
+threshold and raise a staff notification the same way it raises one for an
+order — which also needs B-20, since the last rung is SMS.
 
 ---
 

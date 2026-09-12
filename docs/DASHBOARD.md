@@ -148,3 +148,46 @@ failure.
   not warrant a second long-lived connection per tab.
 - **No customers, reservations, POS or analytics screens.** Those belong to
   their own phases.
+
+## Conversations and settings (the pilot-readiness pass)
+
+Two screens added after Phase 6, because without them a restaurant cannot be
+onboarded or run without an engineer.
+
+**Conversations** is the staff side of the bot's handoff. It exists because of
+one sentence the bot says — *"somebody will reply here shortly"* — which was,
+until this screen, a promise the software did not keep, made at the worst
+possible moment: when a customer has already given up on the bot.
+
+The list is sorted by who has waited longest, the waiting time is the loudest
+thing on each row, and a count badge sits in the navigation so nobody has to
+keep the tab open during a rush. Staff read the thread, reply over the same
+number the bot uses — so the customer sees one continuous conversation — and
+hand it back to the bot when they are done. The reply box is disabled with an
+explanation once WhatsApp's 24-hour window has closed, rather than letting
+somebody type a paragraph and watch it be refused.
+
+**Settings** connects a WhatsApp number, toggles notification channels, and
+lists message templates with their approval status. The last of those is the
+reason the screen matters most: a rejected or paused template is the likeliest
+reason a restaurant's customers quietly stop hearing from them, and it fails
+silently everywhere else — so it is called out at the top of the page with
+Meta's own wording next to the template it refused. Provider credentials are
+write-only and never rendered.
+
+### A bug the browser found, again
+
+`POST` requests with no body were failing before they reached a handler. The
+dashboard's API client set `content-type: application/json` on every request,
+and Fastify rejects a request that announces JSON and sends nothing — *"Body
+cannot be empty when content-type is set to 'application/json'"*, a 400.
+
+The symptom was a button that appeared to do nothing: **Hand back to the bot**
+clicked cleanly, the request 400'd, and the conversation stayed in the inbox.
+Every integration test passed, because `app.inject` in the API suite never goes
+through this client. The fix declares the content type only when there is a body
+— the root cause, rather than passing `{}` at the call site, which is what an
+earlier workaround in `refreshSession` had quietly done.
+
+That is now three phases running in which the only thing to catch a real defect
+was a real browser.

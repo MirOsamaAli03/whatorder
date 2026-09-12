@@ -30,18 +30,20 @@ The governing principle, from [ENGINEERING_SPEC.md](./ENGINEERING_SPEC.md):
   machine, a deterministic tap-driven flow in English and Roman Urdu, cart,
   COD checkout, order tracking and human handoff.
   [docs/PHASE_6.md](./docs/PHASE_6.md)
-- **Dashboard and kitchen display shipped** — sign-in, live orders, menu
-  management and the KDS, with 20 browser tests against the real stack.
-  [docs/DASHBOARD.md](./docs/DASHBOARD.md)
+- **Dashboard shipped** — sign-in, live orders, menu management, the KDS, the
+  WhatsApp conversations inbox and notification settings, with 26 browser tests
+  against the real stack. [docs/DASHBOARD.md](./docs/DASHBOARD.md)
+- **Pilot ready** — a restaurant can be onboarded and run without an engineer.
+  [docs/WHATSAPP_ONBOARDING.md](./docs/WHATSAPP_ONBOARDING.md) covers connecting
+  a number, including the migration objection.
 
-439 unit and integration tests, plus 20 browser tests. Phase 7 onward (POS,
+453 unit and integration tests, plus 26 browser tests. Phase 7 onward (POS,
 payments, analytics, reservations, AI) is not started.
 
 Deferred and unfinished work is tracked in [docs/BACKLOG.md](./docs/BACKLOG.md).
-The three largest gaps are no staff inbox for handed-off WhatsApp conversations
-— a promise made to customers that the software does not yet keep — a real SMS
-provider, without which the last rung of the escalation ladder logs instead of
-sending, and menu image upload, which needs a storage backend.
+The largest remaining gap is a real SMS provider: without one the last rung of
+the escalation ladder logs instead of sending, so an ignored alert never reaches
+a phone. After that, menu image upload, which needs a storage backend.
 
 ## Quick start
 

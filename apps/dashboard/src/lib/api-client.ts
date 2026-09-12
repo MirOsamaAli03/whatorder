@@ -93,7 +93,16 @@ async function rawRequest(path: string, options: RequestOptions = {}): Promise<R
     // via CORS_ORIGINS with credentials enabled.
     credentials: 'include',
     headers: {
-      'content-type': 'application/json',
+      /**
+       * Declared only when there is actually a body.
+       *
+       * Fastify rejects a request that announces `application/json` and then
+       * sends nothing — "Body cannot be empty when content-type is set to
+       * 'application/json'", a 400 — so a bodiless POST like
+       * `/conversations/:id/resolve` failed before it reached the handler. The
+       * symptom was a button that appeared to do nothing.
+       */
+      ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
       ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
       ...options.headers,
     },

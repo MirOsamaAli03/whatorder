@@ -215,3 +215,85 @@ export interface RealtimeEvent {
   payload: Record<string, unknown>;
   occurredAt: string;
 }
+
+/**
+ * A WhatsApp conversation, as the inbox sees it.
+ *
+ * `waitingSeconds` and `canReply` are both computed by the API. The first is
+ * what the screen sorts and colours on; the second is WhatsApp's 24-hour
+ * service window, which the UI must respect rather than discover by having a
+ * reply refused (plan §2.2).
+ */
+export interface ConversationSummary {
+  id: string;
+  branchId: string | null;
+  contactNumber: string;
+  customerId: string | null;
+  customerName: string | null;
+  state: string;
+  lastInboundAt: string | null;
+  lastMessage: { body: string | null; direction: string; at: string } | null;
+  waitingSeconds: number | null;
+  canReply: boolean;
+}
+
+export interface ConversationMessage {
+  id: string;
+  direction: string;
+  body: string | null;
+  templateKey: string | null;
+  status: string | null;
+  occurredAt: string;
+  deliveredAt: string | null;
+  readAt: string | null;
+}
+
+export interface ConversationThread {
+  id: string;
+  branchId: string | null;
+  contactNumber: string;
+  state: string;
+  lastInboundAt: string | null;
+  customer: { id: string; name: string | null; phone: string } | null;
+  canReply: boolean;
+  messages: ConversationMessage[];
+}
+
+/** Notification settings, per recipient and channel. */
+export interface NotificationPreference {
+  recipientType: string;
+  channel: string;
+  enabled: boolean;
+}
+
+/** A connected WhatsApp number. Credentials are never returned. */
+export interface WhatsAppAccount {
+  id: string;
+  branchId: string | null;
+  phoneNumberId: string;
+  displayNumber: string;
+  wabaId: string | null;
+  provider: string;
+  hasCredentials: boolean;
+  isActive: boolean;
+}
+
+/**
+ * A message template and where Meta has got to with it.
+ *
+ * `status` and `rejectionReason` are the reason this screen exists: until a
+ * template is APPROVED, no order update can reach a customer whose 24-hour
+ * window has closed, and a REJECTED one is why their customers went quiet.
+ */
+export interface WhatsAppTemplate {
+  id: string;
+  accountId: string;
+  templateKey: string;
+  providerName: string;
+  language: string;
+  category: string;
+  status: string;
+  rejectionReason: string | null;
+  body: string;
+  approvedAt: string | null;
+}
