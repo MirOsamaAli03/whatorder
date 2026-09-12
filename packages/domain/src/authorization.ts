@@ -112,6 +112,33 @@ export const ROLE_PERMISSIONS: Readonly<Record<SystemRole, readonly Permission[]
     Permission.ANALYTICS_VIEW,
     Permission.BRANCHES_VIEW,
   ],
+
+  /**
+   * The WhatsApp conversation engine (ENGINEERING_SPEC.md 21).
+   *
+   * The narrowest role in the system, and the list is worth reading for what it
+   * leaves out. The bot can show a menu, build a cart, place an order and tell a
+   * customer where that order has got to — the whole of a conversational
+   * ordering flow, and nothing else.
+   *
+   * It deliberately has no ORDERS_UPDATE: a message from a customer must never
+   * be able to move an order through the kitchen, and a channel that could
+   * advance its own orders would make the KDS a suggestion. No ORDERS_CANCEL
+   * either — a cancellation is a decision with a refund attached, so it goes to
+   * a person. No payments, no staff, no analytics, no audit.
+   *
+   * This is also the mechanism behind invariant 9 holding once Phase 11's AI
+   * layer arrives: the model produces intents, but they execute as this
+   * principal, so no prompt can talk its way into a permission it does not have.
+   */
+  [SystemRole.CHANNEL_BOT]: [
+    Permission.MENU_VIEW,
+    Permission.ORDERS_CREATE,
+    Permission.ORDERS_VIEW,
+    Permission.CUSTOMERS_VIEW,
+    Permission.CUSTOMERS_UPDATE,
+    Permission.BRANCHES_VIEW,
+  ],
 };
 
 /** Union of the permissions granted by a set of role names. */

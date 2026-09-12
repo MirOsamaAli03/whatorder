@@ -5,8 +5,17 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env.schema';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConversationService } from '../whatsapp/conversation.service';
+import { WhatsAppSenderService } from '../whatsapp/whatsapp-sender.service';
 
 const PROVIDER = 'whatsapp';
+
+/** Where a payload belongs, from app_whatsapp_account_route. */
+interface Route {
+  account_id: string;
+  tenant_id: string;
+  branch_id: string | null;
+}
 
 /** One thing worth acting on, pulled out of a provider payload. */
 interface ParsedItem {
@@ -20,6 +29,8 @@ interface ParsedItem {
   /** Messages only. */
   messageId?: string;
   body?: string;
+  /** The id of a tapped list row or reply button, when there was one. */
+  replyId?: string;
   /** Statuses only. */
   messageRef?: string;
   status?: string;
@@ -30,15 +41,17 @@ interface ParsedItem {
 /**
  * Inbound WhatsApp webhooks (ENGINEERING_SPEC.md 68; plan 2.2).
  *
- * Phase 5's half of the channel: **delivery-status callbacks**, and recording
- * inbound messages. Conversational ordering — reading a message and replying
- * with a menu — is Phase 6 and deliberately not here.
+ * The single entry point for every tenant's WhatsApp traffic: delivery-status
+ * callbacks (Phase 5) and inbound customer messages (Phase 6).
  *
- * Recording inbound messages is not, however, optional at this stage. The
- * 24-hour customer service window is computed from the timestamp of a contact's
- * most recent inbound message, so without these rows every outbound message
- * would look as though the window were closed and would need an approved
- * template. The rows are the mechanism, not a log.
+ * Recording inbound messages is not merely a log. The 24-hour customer service
+ * window is computed from the timestamp of a contact's most recent inbound
+ * message, so without these rows every outbound message would look as though
+ * the window were closed and would need an approved template.
+ *
+ * This service does the provider-facing work — verify, deduplicate, route,
+ * record — and then hands a normalized turn to ConversationService, which knows
+ * nothing about Meta's payload shape (ENGINEERING_SPEC.md 21).
  *
  * ## Routing
  *
@@ -55,6 +68,8 @@ export class WhatsAppWebhookService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly conversation: ConversationService,
+    private readonly sender: WhatsAppSenderService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -143,7 +158,7 @@ export class WhatsAppWebhookService {
       return false;
     }
 
-    return this.prisma.forTenant(route.tenant_id, async (tx) => {
+    const claimed = await this.prisma.forTenant(route.tenant_id, async (tx) => {
       // Replay protection (spec 68). A unique insert, so a duplicate delivery
       // loses the race and changes nothing — rather than a read-then-write,
       // which two concurrent deliveries would both pass.
@@ -181,13 +196,87 @@ export class WhatsAppWebhookService {
 
       return true;
     });
+
+    // The conversation runs AFTER that transaction commits, not inside it.
+    //
+    // The engine opens its own tenant-scoped transactions — one per service
+    // call — and nesting them inside this one would hold a connection open for
+    // the whole exchange and deadlock the moment the pool ran dry. It also
+    // means the inbound message is durably recorded before any reply is
+    // attempted: a crash mid-conversation loses the reply, never the record
+    // that the customer wrote.
+    if (claimed && item.eventType === 'message') {
+      await this.converse(route, item);
+    }
+
+    return claimed;
   }
 
-  private async resolveRoute(
-    phoneNumberId: string,
-  ): Promise<{ account_id: string; tenant_id: string; branch_id: string | null } | null> {
+  /**
+   * Runs one turn of the conversation and sends whatever it produced.
+   *
+   * Failures are contained here. The webhook has already been accepted and the
+   * message recorded; a conversation that throws must not turn into a non-200,
+   * because the provider would redeliver the message and the customer would be
+   * answered twice for one thing they said.
+   */
+  private async converse(route: Route, item: ParsedItem): Promise<void> {
+    const branchId = route.branch_id ?? (await this.defaultBranch(route.tenant_id));
+
+    if (!branchId) {
+      this.logger.error(
+        { tenantId: route.tenant_id },
+        'Cannot start a conversation: the organization has no active branch',
+      );
+      return;
+    }
+
+    try {
+      const messages = await this.conversation.handle({
+        tenantId: route.tenant_id,
+        branchId,
+        contactNumber: toE164(item.contact),
+        text: item.body ?? '',
+        replyId: item.replyId ?? null,
+      });
+
+      await this.sender.send(
+        route.tenant_id,
+        route.account_id,
+        toE164(item.contact),
+        messages,
+      );
+    } catch (error) {
+      this.logger.error(
+        { err: error, tenantId: route.tenant_id },
+        'The conversation engine failed on an inbound message',
+      );
+    }
+  }
+
+  /**
+   * The branch a tenant-wide number orders from.
+   *
+   * A chain runs a number per outlet and `whatsapp_accounts.branch_id` carries
+   * it. A home kitchen has one branch, so there is nothing to choose. A
+   * multi-branch tenant on a single number is the gap — it picks the first
+   * active branch, which is wrong for them; asking the customer which outlet
+   * they want is tracked as B-25.
+   */
+  private async defaultBranch(tenantId: string): Promise<string | null> {
+    const branch = await this.prisma.forTenant(tenantId, (tx) =>
+      tx.branch.findFirst({
+        where: { status: 'ACTIVE' },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      }),
+    );
+    return branch?.id ?? null;
+  }
+
+  private async resolveRoute(phoneNumberId: string): Promise<Route | null> {
     const rows = await this.prisma.withoutTenant((tx) =>
-      tx.$queryRaw<Array<{ account_id: string; tenant_id: string; branch_id: string | null }>>`
+      tx.$queryRaw<Route[]>`
         SELECT account_id, tenant_id, branch_id
         FROM app_whatsapp_account_route(${phoneNumberId})
       `,
@@ -205,7 +294,7 @@ export class WhatsAppWebhookService {
    */
   private async recordInbound(
     tx: TransactionClient,
-    route: { account_id: string; tenant_id: string },
+    route: Route,
     item: ParsedItem,
   ): Promise<void> {
     const contactNumber = toE164(item.contact);
@@ -335,6 +424,8 @@ function parseWebhook(payload: unknown): ParsedItem[] {
         const from = asString(record?.from);
         if (!id || !from) continue;
 
+        const interactive = readInteractive(record?.interactive);
+
         items.push({
           providerEventId: `msg:${id}`,
           eventType: 'message',
@@ -342,7 +433,10 @@ function parseWebhook(payload: unknown): ParsedItem[] {
           contact: from,
           occurredAt: toDate(record?.timestamp),
           messageId: id,
-          body: asString(asRecord(record?.text)?.body) ?? undefined,
+          // The title of a tapped row or button stands in for the text, so the
+          // message log reads as a conversation rather than as a list of ids.
+          body: interactive?.title ?? asString(asRecord(record?.text)?.body) ?? undefined,
+          ...(interactive?.id ? { replyId: interactive.id } : {}),
           raw: record ?? {},
         });
       }
@@ -371,6 +465,29 @@ function parseWebhook(payload: unknown): ParsedItem[] {
   }
 
   return items;
+}
+
+/**
+ * The id and title of a tapped list row or reply button.
+ *
+ * This is the single most important thing the parser extracts. The id is what
+ * the conversation engine reads to know exactly which menu item the customer
+ * chose, which is why Phase 6 needs no language understanding for the common
+ * path (plan 2.2).
+ *
+ * Meta nests the two forms differently — `list_reply` and `button_reply` — and
+ * both are read here so nothing downstream has to care which was tapped.
+ */
+function readInteractive(value: unknown): { id: string; title?: string } | null {
+  const interactive = asRecord(value);
+  if (!interactive) return null;
+
+  const reply = asRecord(interactive.list_reply) ?? asRecord(interactive.button_reply);
+  const id = asString(reply?.id);
+  if (!id) return null;
+
+  const title = asString(reply?.title);
+  return title ? { id, title } : { id };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

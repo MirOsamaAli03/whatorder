@@ -331,3 +331,63 @@ export const ConsentStatus = {
   REVOKED: 'REVOKED',
 } as const;
 export type ConsentStatus = (typeof ConsentStatus)[keyof typeof ConsentStatus];
+
+/**
+ * Where a conversation has got to (ENGINEERING_SPEC.md 22).
+ *
+ * The state decides what the *next* inbound message means. "1" is a menu
+ * selection while browsing, a quantity while building a cart, and an order type
+ * while choosing one — so without a state there is no way to read it.
+ */
+export const ConversationState = {
+  IDLE: 'IDLE',
+  BROWSING_MENU: 'BROWSING_MENU',
+  BUILDING_CART: 'BUILDING_CART',
+  SELECTING_ORDER_TYPE: 'SELECTING_ORDER_TYPE',
+  ASKING_ADDRESS: 'ASKING_ADDRESS',
+  CONFIRMING_ORDER: 'CONFIRMING_ORDER',
+  /** Reached only once online payment lands in Phase 8. */
+  AWAITING_PAYMENT: 'AWAITING_PAYMENT',
+  TRACKING_ORDER: 'TRACKING_ORDER',
+  /** Reached only once reservations land in Phase 10. */
+  RESERVATION_FLOW: 'RESERVATION_FLOW',
+  HUMAN_HANDOFF: 'HUMAN_HANDOFF',
+} as const;
+export type ConversationState = (typeof ConversationState)[keyof typeof ConversationState];
+
+/** The channel a conversation is happening on. WhatsApp is the only one today. */
+export const ConversationChannel = {
+  WHATSAPP: 'WHATSAPP',
+  WEB: 'WEB',
+} as const;
+export type ConversationChannel =
+  (typeof ConversationChannel)[keyof typeof ConversationChannel];
+
+/**
+ * What a customer is asking for (ENGINEERING_SPEC.md 23).
+ *
+ * Phase 6 derives these deterministically — from the id on a tapped button or
+ * list row, and from a small set of keywords. Phase 11's AI layer classifies
+ * the same set for free text it cannot match, and produces the same commands;
+ * the domain services validate either identically, which is what keeps the
+ * channel working when the model is down.
+ */
+export const ConversationIntent = {
+  GREETING: 'GREETING',
+  BROWSE_MENU: 'BROWSE_MENU',
+  SEARCH_MENU: 'SEARCH_MENU',
+  ADD_TO_CART: 'ADD_TO_CART',
+  REMOVE_FROM_CART: 'REMOVE_FROM_CART',
+  VIEW_CART: 'VIEW_CART',
+  CHECKOUT: 'CHECKOUT',
+  SELECT_ORDER_TYPE: 'SELECT_ORDER_TYPE',
+  PROVIDE_ADDRESS: 'PROVIDE_ADDRESS',
+  CONFIRM: 'CONFIRM',
+  CANCEL: 'CANCEL',
+  TRACK_ORDER: 'TRACK_ORDER',
+  HUMAN_HANDOFF: 'HUMAN_HANDOFF',
+  /** Nothing matched. The reply says so rather than guessing. */
+  UNKNOWN: 'UNKNOWN',
+} as const;
+export type ConversationIntent =
+  (typeof ConversationIntent)[keyof typeof ConversationIntent];

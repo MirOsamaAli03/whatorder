@@ -26,17 +26,22 @@ The governing principle, from [ENGINEERING_SPEC.md](./ENGINEERING_SPEC.md):
 - **Phase 5 complete** — the notification pipeline, the 24-hour WhatsApp
   service window, per-tenant BSP routing, template approval tracking, consent,
   and delivery callbacks. [docs/PHASE_5.md](./docs/PHASE_5.md)
+- **Phase 6 complete** — WhatsApp inbound ordering: the conversation state
+  machine, a deterministic tap-driven flow in English and Roman Urdu, cart,
+  COD checkout, order tracking and human handoff.
+  [docs/PHASE_6.md](./docs/PHASE_6.md)
 - **Dashboard and kitchen display shipped** — sign-in, live orders, menu
   management and the KDS, with 20 browser tests against the real stack.
   [docs/DASHBOARD.md](./docs/DASHBOARD.md)
 
-375 unit and integration tests, plus 20 browser tests. Phase 6 onward (inbound
-WhatsApp ordering, POS, payments, analytics, reservations, AI) is not started.
+439 unit and integration tests, plus 20 browser tests. Phase 7 onward (POS,
+payments, analytics, reservations, AI) is not started.
 
 Deferred and unfinished work is tracked in [docs/BACKLOG.md](./docs/BACKLOG.md).
-The two largest gaps are a real SMS provider — without which the last rung of
-the escalation ladder logs instead of sending — and menu image upload, which
-needs a storage backend.
+The three largest gaps are no staff inbox for handed-off WhatsApp conversations
+— a promise made to customers that the software does not yet keep — a real SMS
+provider, without which the last rung of the escalation ladder logs instead of
+sending, and menu image upload, which needs a storage backend.
 
 ## Quick start
 
@@ -64,14 +69,14 @@ Seeded sign-ins, password `RestaurantOS123!`:
 
 ```text
 apps/
-  api/          NestJS + Fastify — HTTP surface and domain modules
+  api/          NestJS + Fastify — HTTP surface, domain modules, the WhatsApp bot
   worker/       Outbox publisher, escalation monitor, notification dispatch
   dashboard/    Next.js — sign-in, live orders, menu, kitchen display
 packages/
   types/        Enums, permissions, error codes, the auth context shape
   domain/       Framework-free logic: Money, authorization, notification rules
   database/     Prisma schema, migrations, RLS policies, seed
-  whatsapp/     WhatsAppProvider interface, provider registry, dev sender
+  whatsapp/     WhatsAppProvider interface, interactive messages, dev sender
   notifications/ Channel adapters, the dispatcher and the sender
 infrastructure/
   docker/       docker-compose for Postgres and Redis
@@ -84,13 +89,20 @@ state machine and permission checks live there so that the WhatsApp adapter,
 the POS, the web storefront and the AI tool layer all execute the *same* code —
 which is what makes ENGINEERING_SPEC.md §87 structural rather than aspirational.
 
-## Three things worth knowing before changing anything
+## Four things worth knowing before changing anything
 
 **Tenant isolation is enforced twice.** Application code scopes every query
 through `PrismaService.forTenant()`, and PostgreSQL Row-Level Security enforces
 it again underneath. The API connects as a role that is not a superuser, owns
 no tables and lacks `BYPASSRLS`, and it refuses to start otherwise. A query that
 forgets its tenant filter returns nothing rather than everything.
+
+**A channel is a principal, not an exception.** The WhatsApp bot calls the same
+cart and order services the POS does, and it does so as a real member of the
+organization: a membership holding `CHANNEL_BOT`, confined to one branch. So
+branch checks, RLS and the audit trail all apply to it unchanged, and it holds
+the narrowest grants in the system — notably not `orders.update`, because a
+message from a customer must never move an order through the kitchen.
 
 **Three database roles, not one.** The API connects as `restaurant_app` (RLS
 enforced), migrations as `restaurant_owner`, and the background worker as

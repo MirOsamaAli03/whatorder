@@ -1,4 +1,5 @@
 export * from './authorization';
+export * from './conversation';
 export * from './errors';
 export * from './kitchen';
 export * from './menu';

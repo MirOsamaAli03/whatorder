@@ -46,6 +46,70 @@ are covered, and menu structure changes rarely.
 
 ---
 
+## Open — new in Phase 6 (WhatsApp ordering)
+
+### B-24. No inbox for handed-off conversations
+
+**Phase:** 6 · **Status:** the handoff works, the other end does not
+
+A customer who asks for a person gets told somebody will reply, and the bot
+correctly goes silent. Nothing then shows that conversation to the restaurant:
+there is no inbox screen, no alert, and no way to reply from the dashboard or to
+end the handoff and give the conversation back to the bot.
+
+So today the promise "somebody will reply here shortly" is only true if a member
+of staff happens to be watching the WhatsApp Business app on the same number —
+which, after the number migration in B-22, they may not be. **This is the most
+consequential gap in the phase**: it is a promise made to a customer that the
+software does not keep.
+
+**Needs:** a conversations screen listing sessions in HUMAN_HANDOFF, a reply box
+posting through WhatsAppSenderService, an escalation-style alert when one goes
+unanswered, and a control returning the session to IDLE.
+
+### B-25. A multi-branch tenant on one number picks the first branch
+
+**Phase:** 6 · **Status:** narrow, but wrong when it happens
+
+`whatsapp_accounts.branch_id` carries the outlet, and a chain is expected to run
+a number per branch — which is what Kababjees-class targets do. A home kitchen
+has one branch, so there is nothing to choose. The gap is a multi-branch tenant
+on a single tenant-wide number: the conversation picks the oldest active branch,
+which will be the wrong one for most of their customers.
+
+**Needs:** a branch-selection step before the menu — either a list of branches,
+or, better, asking for the delivery address first and using the existing §29
+zone resolution to choose the branch, which is the answer the rest of the system
+already has.
+
+### B-26. Modifiers and variants cannot be chosen in the conversation
+
+**Phase:** 6 · **Status:** deliberate scope limit
+
+The cart and order services fully support variants and modifier groups, and the
+POS and dashboard expose them. The WhatsApp flow adds an item at its base price
+with no options, because asking "which size?" and "any extras?" over reply
+buttons is several more states and the deterministic flow was worth landing
+first.
+
+A restaurant whose menu is mostly single-price dishes — most home kitchens — is
+unaffected. One selling pizzas by size is not really usable over WhatsApp yet.
+
+**Needs:** a modifier sub-flow: required groups asked in order as button or list
+prompts, optional ones offered once, then the existing addItem call with the
+chosen optionIds — which already validates that each belongs to the item.
+
+### B-27. Free text outside the keyword list is not understood
+
+**Phase:** 6 · **Status:** by design, closed by Phase 11
+
+"2 chicken burger aur ek coke" returns UNKNOWN and the bot offers its buttons
+again. That is the deliberate Phase 6 position (plan §2.2: prove the channel
+works with no LLM in the path), and the menu search covers a typed dish name,
+but it is the gap Phase 11's AI layer exists to close.
+
+---
+
 ## Open — new in Phase 5 (notifications)
 
 ### B-20. No real SMS or email provider

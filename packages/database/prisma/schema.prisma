@@ -1568,3 +1568,82 @@ model InboundWebhookEvent {
   @@index([processedAt])
   @@map("inbound_webhook_events")
 }
+
+// ---------------------------------------------------------------------------
+// Conversations (ENGINEERING_SPEC.md 21, 22)
+// ---------------------------------------------------------------------------
+
+enum ConversationState {
+  IDLE
+  BROWSING_MENU
+  BUILDING_CART
+  SELECTING_ORDER_TYPE
+  ASKING_ADDRESS
+  CONFIRMING_ORDER
+  AWAITING_PAYMENT
+  TRACKING_ORDER
+  RESERVATION_FLOW
+  HUMAN_HANDOFF
+
+  @@map("conversation_state")
+}
+
+enum ConversationChannel {
+  WHATSAPP
+  WEB
+
+  @@map("conversation_channel")
+}
+
+/// Where one person's conversation has got to (ENGINEERING_SPEC.md 22).
+///
+/// The state is what makes an inbound message readable at all: "1" is a menu
+/// selection while browsing, a quantity while building a cart, and an order type
+/// while choosing one. Without somewhere to keep it, every message would have to
+/// be self-describing, and the conversation would have to be a command language
+/// rather than a conversation.
+///
+/// Deliberately holds ids rather than copies. The cart is the cart service's
+/// cart and the price is whatever the pricing engine says it is now; caching
+/// either here would create a second source of truth for the two things
+/// ENGINEERING_SPEC.md is most emphatic must have only one (27: never accept a
+/// total from the client).
+model ConversationSession {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @map("tenant_id") @db.Uuid
+  /// Which outlet this conversation is ordering from, resolved from the
+  /// WhatsApp number the customer messaged rather than from anything they said.
+  branchId String? @map("branch_id") @db.Uuid
+
+  /// Null until the customer is identified — a first-time sender has no record.
+  customerId String? @map("customer_id") @db.Uuid
+
+  channel ConversationChannel @default(WHATSAPP)
+  /// The customer's identifier on that channel: their number, in E.164.
+  externalUserId String @map("external_user_id") @db.VarChar(64)
+
+  state ConversationState @default(IDLE)
+  /// The working state: cart id, the item awaiting a quantity, the page being
+  /// browsed. Small by design — see the note above.
+  context Json @default("{}")
+
+  /// Matched to WhatsApp's own 24-hour window: outside it the bot cannot reply
+  /// free-form anyway, so a session that outlived the window would resume a
+  /// half-built cart it has no way to talk about.
+  expiresAt DateTime @map("expires_at")
+
+  /// When the customer last said something. Distinct from updatedAt, which also
+  /// moves when the bot replies.
+  lastInboundAt DateTime? @map("last_inbound_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  /// One live conversation per person per channel. A second would mean two
+  /// half-built carts and a customer whose replies land in whichever the code
+  /// happened to load.
+  @@unique([tenantId, channel, externalUserId])
+  @@index([tenantId, state])
+  @@index([expiresAt])
+  @@map("conversation_sessions")
+}

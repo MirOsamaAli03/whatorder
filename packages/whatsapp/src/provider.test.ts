@@ -8,6 +8,7 @@ const credentials = { phoneNumberId: 'pn-1' };
 
 const session: OutboundMessage = {
   mode: WhatsAppSendMode.SESSION,
+  kind: 'text',
   to: '+923001234567',
   body: 'Your order is ready.',
 };

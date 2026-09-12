@@ -341,9 +341,10 @@ export class NotificationSender {
 
     const message: OutboundMessage =
       decision.mode === WhatsAppSendMode.SESSION
-        ? { mode: WhatsAppSendMode.SESSION, to: destination, body }
+        ? { mode: WhatsAppSendMode.SESSION, kind: 'text', to: destination, body }
         : {
             mode: WhatsAppSendMode.TEMPLATE,
+            kind: 'template',
             to: destination,
             templateName: template!.providerName,
             language: LANGUAGE_TAGS[language] ?? 'en',

@@ -8,6 +8,8 @@ import {
   MembershipStatus,
   CartStatus,
   ConsentStatus,
+  ConversationChannel,
+  ConversationState,
   DeliveryZoneType,
   EscalationTarget,
   IdempotencyStatus,
@@ -126,6 +128,8 @@ describe('enum parity between Prisma and @restaurant-os/types', () => {
     ['MessageDirection', MessageDirection],
     ['WhatsAppSendMode', WhatsAppSendMode],
     ['ConsentStatus', ConsentStatus],
+    ['ConversationState', ConversationState],
+    ['ConversationChannel', ConversationChannel],
   ];
 
   it.each(cases)('%s matches', (name, typescriptEnum) => {

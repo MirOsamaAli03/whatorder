@@ -14,6 +14,7 @@ function whatsappRequest(providerName = 'log'): ChannelSendRequest {
       providerName,
       message: {
         mode: WhatsAppSendMode.SESSION,
+        kind: 'text',
         to: '+923001234567',
         body: 'Your order is ready.',
       },

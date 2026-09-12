@@ -26,6 +26,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { RedisModule } from './redis/redis.module';
 import { StaffModule } from './staff/staff.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 /**
  * The modular monolith (ENGINEERING_SPEC.md 4).
@@ -93,6 +94,7 @@ import { StaffModule } from './staff/staff.module';
     RealtimeModule,
     KdsModule,
     StaffModule,
+    WhatsAppModule,
     NotificationsModule,
   ],
   providers: [
