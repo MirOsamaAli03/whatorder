@@ -1,0 +1,296 @@
+# Backlog — deferred and unfinished work
+
+Work that was in scope for a phase but not delivered in it, plus decisions
+consciously postponed. Kept in the repository rather than in a conversation so
+nothing is quietly dropped.
+
+Each item says which phase it belonged to, why it was deferred, and what would
+have to be true to close it.
+
+---
+
+## Open — carried from Phase 2 (menu)
+
+### B-2. Menu image upload
+
+**Phase:** 2 · **Status:** not started · **Depends on:** B-1
+
+`menu_categories.image_url` and `menu_items.image_url` accept a URL, and the API
+stores and returns it. There is no upload path: no S3-compatible bucket wiring,
+no presigned-URL endpoint, no validation of type or size, no thumbnailing.
+
+Deferred deliberately alongside B-1. A presigned-upload flow is shaped by the
+screen that uses it — direct-to-bucket versus proxied, where cropping happens,
+what a failed upload leaves behind — and designing it without that screen tends
+to produce an endpoint the UI then has to work around.
+
+**Needs:** a `StorageProvider` abstraction (mirroring `PaymentProvider` and
+`WhatsAppProvider`), an S3-compatible implementation, a presigned-upload
+endpoint with content-type and size limits, and cleanup of orphaned objects.
+
+---
+
+## Open — carried from the dashboard
+
+### B-19. Category, modifier and variant editors
+
+**Phase:** dashboard · **Status:** not started
+
+The menu screen can create and edit items, toggle availability per branch and
+set a branch price. Categories, modifier groups and variants are still API-only:
+they can be read and are enforced correctly at order time, but there is no
+screen to rename a category, reorder one, or build a new modifier group.
+
+Lower priority than B-1 was, because the daily operations — price, sold out —
+are covered, and menu structure changes rarely.
+
+---
+
+## Open — new in Phase 5 (notifications)
+
+### B-20. No real SMS or email provider
+
+**Phase:** 5 · **Status:** abstraction done, provider missing
+
+`LogChannelAdapter` stands in for SMS and email: both channels are registered,
+both are chosen and recorded correctly, and both log instead of sending. The
+escalation ladder therefore *believes* it has reached a manager's phone when it
+has not.
+
+This is the one gap in this phase with operational consequences, because plan
+§2.8's off-channel fallback is the last rung of "no order goes unnoticed".
+Everything above the adapter is finished, so closing it is one class plus
+credentials.
+
+**Needs:** a Pakistani SMS gateway account (Telenor, Jazz or an aggregator), an
+adapter implementing `NotificationChannelAdapter`, and its credentials per
+tenant — following `whatsapp_accounts`, since an SMS sender id is per business
+too. Email needs the same shape plus a template renderer.
+
+### B-21. No notification settings screen
+
+**Phase:** 5 · **Status:** API complete, UI absent
+
+Preferences, WhatsApp numbers, templates and their approval status are all
+readable and writable through the API, and the approval status is the thing a
+restaurant most needs to see — a `REJECTED` template is why their customers
+stopped hearing from them. There is no screen for any of it, so connecting a
+number is an engineer's job.
+
+Same call as B-1 and B-19: the settings screens are grouped and will land
+together.
+
+### B-22. Number migration is unaddressed (plan §2.2)
+
+**Phase:** 5 · **Status:** known onboarding blocker
+
+A Kababjees-class target already uses its WhatsApp number in the WhatsApp
+Business *app*, and a number cannot be in both the app and the API at once.
+Onboarding has to include a guided migration, and the restaurant loses its
+existing chat history and app workflow. The plan predicted this would be the
+single biggest onboarding objection and it is unaddressed: there is no guidance,
+no checklist and no support doc.
+
+**Needs:** an onboarding flow with the migration steps, a support document, and
+a dashboard state for "number not yet migrated" so it is visible rather than
+presenting as silence.
+
+### B-23. Retry classification is coarse for real providers
+
+**Phase:** 5 · **Status:** correct but untested against a real BSP
+
+`WhatsAppSendError.retryable` is the right shape, and the log provider
+classifies its own failures. A real BSP returns dozens of error codes, and
+misclassifying a permanent one as retryable wastes six attempts while
+misclassifying a transient one loses a message. The mapping can only be written
+against a real provider's documentation.
+
+---
+
+## Closed in Phase 5
+
+### B-16. Notifications for escalations — **closed**
+
+**Phase:** 4 · **Closed by:** Phase 5
+
+Every escalation rung writes an `OrderAcknowledgementTimeout` event to the
+outbox, and the notification dispatcher now picks it up and fans it out to every
+enabled staff channel at once — dashboard, WhatsApp and SMS together, because
+§33's point is that it escalates *off-screen* once the screen has been ignored.
+
+Genuinely reaching a manager's phone still depends on B-20: the SMS adapter logs
+rather than sends. WhatsApp to staff works today for any staff member with a
+phone number on their account.
+
+---
+
+## Open — carried from Phase 4 (real-time and KDS)
+
+### B-17. KDS disconnect detection (§70)
+
+**Phase:** 4 · **Status:** not started
+
+§70 lists "KDS disconnected" as a critical alert. The stream heartbeats and the
+client can detect staleness, but the API keeps no registry of connected screens,
+so nothing server-side notices when a kitchen's display drops off. Needs a
+presence record keyed by branch, updated on connect and heartbeat.
+
+### B-18. Outbox retention
+
+**Phase:** 4 · **Status:** minor, but unbounded
+
+Processed outbox rows are never deleted. They are a useful event log, but the
+table grows forever. Needs a retention policy and a prune job — the same sweeper
+that B-13 needs for carts and idempotency keys.
+
+---
+
+## A note on the UI backlog
+
+Closed. `apps/dashboard` now ships sign-in, live orders, the menu manager and
+the kitchen display, verified by 20 browser tests against the real stack — see
+[DASHBOARD.md](./DASHBOARD.md). What remains of the original UI backlog is
+image upload (B-2) plus the smaller editors listed in B-19.
+
+---
+
+## Open — carried from Phase 3 (orders)
+
+### B-11. Delivery zone management API
+
+**Phase:** 3 · **Status:** not started · **Blocks:** any restaurant configuring
+its own delivery area
+
+Delivery zones drive branch selection and the delivery fee, and the resolution
+rules are implemented and tested. There is no CRUD endpoint: zones can only be
+created by the seed script or by direct SQL, so a restaurant cannot define where
+it delivers without an engineer.
+
+Deferred as administrative configuration, the same call as the menu-management
+UI (B-1) — and it lands most naturally on the same screens.
+
+**Needs:** CRUD under `/branches/:id/delivery-zones` behind `branches.manage`,
+plus the dashboard screen. Polygon zones can follow; the domain function that
+matches a point to a zone is already the only place shape logic lives, so adding
+one does not touch callers.
+
+### B-12. Discounts are plumbed but never computed
+
+**Phase:** 3 · **Status:** deliberate
+
+`computeOrderTotals` takes a discount, applies it before tax and caps it at the
+subtotal, and `orders.discount_amount` stores the result. Nothing produces a
+non-zero value: promotions and coupons are Phase 12. The path is tested with
+explicit discounts so that when promotions arrive they have somewhere correct to
+plug into.
+
+### B-13. No sweeper for expired carts or idempotency keys
+
+**Phase:** 3 · **Status:** waiting on Phase 4
+
+`carts.expires_at` and `idempotency_keys.expires_at` are both set and both
+indexed; nothing prunes either. Phase 5 added a third candidate: finished
+`notifications` rows. Expired idempotency keys are handled correctly
+on read — an expired key is treated as absent — so this is housekeeping rather
+than a correctness problem. Needs the Phase 4 worker.
+
+### B-14. Blocked customers can still build a cart
+
+**Phase:** 3 · **Status:** minor
+
+`customers.is_blocked` is enforced at checkout and when attaching a customer to
+a cart, but a cart created without a customer and only associated at checkout
+lets a blocked customer get all the way to the last step before being refused.
+Harmless, but poor service.
+
+---
+
+## Open — carried from Phase 1
+
+### B-3. Password reset and invitation email
+
+**Phase:** 1 · **Status:** not started
+
+`StaffService.invite` creates a user with an unusable random password. There is
+no email delivery and no reset flow, so an invited person cannot sign in without
+an administrator setting a password directly in the database.
+
+**Needs:** the email channel from B-20 — the abstraction itself landed in Phase
+5 — then a `password_reset_tokens` table and the two endpoints.
+
+### B-4. Two-factor authentication enforcement
+
+**Phase:** 1 · **Status:** columns exist, unused
+
+`users.two_factor_secret` and `two_factor_enabled_at` exist. Nothing issues,
+verifies or enforces a second factor. ENGINEERING_SPEC.md §5 and §66 ask for it
+on privileged accounts.
+
+### B-5. Platform back office
+
+**Phase:** 1 · **Status:** not started
+
+`PLATFORM_ADMIN` and `users.is_platform_admin` exist and `@PlatformOnly()`
+guards it, but no endpoints use it. Onboarding, suspending or inspecting a
+tenant currently requires database access.
+
+### B-6. Permission caching
+
+**Phase:** 1 · **Status:** deliberate, revisit with data
+
+Roles and permissions are re-read from the database on every authenticated
+request — two queries per call. That is what makes revocation immediate, which
+was the right default. Revisit only when Phase 9's analytics gives real latency
+numbers; caching authorization on a guess is how stale-permission bugs start.
+
+---
+
+## Open — cross-cutting, not yet scheduled
+
+### B-7. Menu import (spec §73)
+
+PDF, Excel, CSV, image or existing website → AI-extracted draft → admin review
+before publishing. Described in §73 but present in no sprint. It is the single
+biggest onboarding accelerator for home kitchens, which are the tenants least
+likely to type a menu in by hand.
+
+**Recommend:** schedule explicitly, most naturally alongside Phase 11's AI layer.
+
+### B-8. SaaS billing
+
+There is no `plans`, `subscriptions` or `tenant_invoices` model. Nothing charges
+the restaurant. Needed before commercial launch even in a trivial form.
+
+### B-9. Receipt and kitchen printing
+
+Thermal ESC/POS printing is expected by most local restaurants and is absent
+from the spec entirely. Confirm whether pilot customers need it; if so it lands
+with the POS in Phase 7.
+
+### B-10. Per-branch category ordering
+
+Category `sort_order` is tenant-wide. Chains that merchandise differently by
+city will want it per branch. Low priority until a chain asks.
+
+---
+
+## Closed
+
+### B-1. Menu management UI — done
+
+Shipped as `/menu` in `apps/dashboard`: categories and items listed with
+branch-resolved prices, an item editor, sold-out toggling per branch, and the
+per-branch price override. Verified by browser tests, including one that marks
+an item sold out at one branch and proves another is unaffected.
+
+See [DASHBOARD.md](./DASHBOARD.md).
+
+### B-15. The kitchen screen — done
+
+Shipped as `/kds`: the four columns from §34, live SSE updates, per-stage timers
+with urgency banding, the unacknowledged banner, sequence-gap detection with
+snapshot recovery, a staleness indicator, and the explicit sound unlock that
+plan §2.8 called for.
+
+Verified by browser tests, including the one that matters most: an order placed
+through the API appears on an already-open kitchen screen with no reload.

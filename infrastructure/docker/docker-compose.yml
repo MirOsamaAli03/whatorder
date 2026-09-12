@@ -1,0 +1,42 @@
+# Local development dependencies.
+#
+# This is the portable path (CI, Linux/macOS, teammates with Docker Desktop).
+# On a Windows machine without Docker, see docs/LOCAL_SETUP.md for the
+# equivalent WSL2 setup — both produce the same two services on the same ports.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: restaurant-os-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: restaurant_owner
+      POSTGRES_PASSWORD: owner_password
+      POSTGRES_DB: restaurant_os
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U restaurant_owner -d restaurant_os']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: restaurant-os-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:

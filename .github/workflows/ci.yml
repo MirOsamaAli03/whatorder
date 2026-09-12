@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: postgresql://restaurant_app:app_password@127.0.0.1:5432/restaurant_os?schema=public
+  DATABASE_URL_ADMIN: postgresql://restaurant_owner:owner_password@127.0.0.1:5432/restaurant_os?schema=public
+  DATABASE_URL_WORKER: postgresql://restaurant_worker:worker_password@127.0.0.1:5432/restaurant_os?schema=public
+  REDIS_URL: redis://127.0.0.1:6379
+  JWT_ACCESS_SECRET: ci_access_secret_that_is_at_least_32_characters
+  JWT_REFRESH_SECRET: ci_refresh_secret_that_is_at_least_32_characters
+  NODE_ENV: test
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: restaurant_owner
+          POSTGRES_PASSWORD: owner_password
+          POSTGRES_DB: restaurant_os
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U restaurant_owner -d restaurant_os"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The application role must exist before migrations run, so that the
+      # ALTER DEFAULT PRIVILEGES grants apply to the tables they create.
+      # Three roles, deliberately: the API runs as restaurant_app with RLS
+      # enforced, migrations run as the owner, and the worker gets a narrow
+      # cross-tenant grant on five tables. Role creation is an infrastructure
+      # step because the schema owner has no CREATEROLE.
+      - name: Create the application and worker roles
+        env:
+          PGPASSWORD: owner_password
+        run: |
+          psql -h 127.0.0.1 -U restaurant_owner -d restaurant_os -v ON_ERROR_STOP=1 \
+            -f infrastructure/docker/init/01-app-role.sql
+          psql -h 127.0.0.1 -U restaurant_owner -d restaurant_os -v ON_ERROR_STOP=1 \
+            -f infrastructure/docker/init/02-worker-role.sql
+
+      - name: Apply migrations to an empty database
+        run: npm run db:deploy
+
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+
+  # The dashboard and kitchen display can only be verified in a browser. Phase 4
+  # shipped a bug that every server-side test passed straight through — status
+  # events routed to the wrong channel — and only a real client attached to the
+  # real stream revealed it. This job exists so that class of bug fails here.
+  browser:
+    runs-on: ubuntu-latest
+    needs: verify
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: restaurant_owner
+          POSTGRES_PASSWORD: owner_password
+          POSTGRES_DB: restaurant_os
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U restaurant_owner -d restaurant_os"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Create the application and worker roles
+        env:
+          PGPASSWORD: owner_password
+        run: |
+          psql -h 127.0.0.1 -U restaurant_owner -d restaurant_os -v ON_ERROR_STOP=1 \
+            -f infrastructure/docker/init/01-app-role.sql
+          psql -h 127.0.0.1 -U restaurant_owner -d restaurant_os -v ON_ERROR_STOP=1 \
+            -f infrastructure/docker/init/02-worker-role.sql
+
+      - run: npm run db:deploy
+      - run: npm run build
+      - run: npm run db:seed
+
+      - run: npx playwright install --with-deps chromium
+
+      - name: Start the stack
+        run: |
+          npm run start -w @restaurant-os/api &
+          npm run start -w @restaurant-os/worker &
+          npm run start -w @restaurant-os/dashboard &
+          npx wait-on http://127.0.0.1:3001/health http://127.0.0.1:3000/login -t 90000
+
+      - run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7

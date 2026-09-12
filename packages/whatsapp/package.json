@@ -1,0 +1,21 @@
+{
+  "name": "@restaurant-os/whatsapp",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@restaurant-os/types": "*"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}

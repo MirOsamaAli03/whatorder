@@ -1,0 +1,1570 @@
+// Restaurant OS — database schema
+//
+// Phase 1 scope: multi-tenancy, identity, RBAC and audit
+// (ENGINEERING_SPEC.md 6, 7, 9, 59). Menu, orders, payments and the rest land
+// in later phases; every table added later must carry tenant isolation
+// (Rule 7) and a matching RLS policy.
+//
+// Conventions:
+//   * Tables and columns are snake_case via @@map / @map, matching the spec.
+//   * Every tenant-owned table carries `tenant_id` and has an RLS policy in
+//     migrations/*/rls.sql. Adding a table without one fails the RLS coverage
+//     test in src/__tests__/rls-coverage.test.ts.
+//   * The runtime connects as a non-owner role without BYPASSRLS, so a missed
+//     application-level filter still returns nothing.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum OrganizationType {
+  RESTAURANT
+  CHAIN
+  HOME_KITCHEN
+  FOOD_VENDOR
+
+  @@map("organization_type")
+}
+
+enum OrganizationStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+
+  @@map("organization_status")
+}
+
+enum BranchStatus {
+  ACTIVE
+  INACTIVE
+  TEMPORARILY_CLOSED
+
+  @@map("branch_status")
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  DISABLED
+
+  @@map("user_status")
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  REMOVED
+
+  @@map("membership_status")
+}
+
+enum Language {
+  EN
+  UR
+  UR_ROMAN
+
+  @@map("language")
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  PERMISSION_CHANGE
+  PRICE_CHANGE
+  AVAILABILITY_CHANGE
+  ORDER_TRANSITION
+  REFUND
+
+  @@map("audit_action")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy (ENGINEERING_SPEC.md 6)
+// ---------------------------------------------------------------------------
+
+/// The top-level tenant. Every tenant-owned row points back here.
+model Organization {
+  id       String             @id @default(uuid()) @db.Uuid
+  name     String             @db.VarChar(200)
+  slug     String             @unique @db.VarChar(100)
+  type     OrganizationType
+  status   OrganizationStatus @default(PENDING)
+  currency String             @default("PKR") @db.VarChar(3)
+  timezone String             @default("Asia/Karachi") @db.VarChar(64)
+  logoUrl  String?            @map("logo_url")
+
+  /// Default language for customer-facing messages (plan 2.3).
+  defaultLanguage Language @default(EN) @map("default_language")
+
+  /// Minutes past midnight, in `timezone`, at which the business day rolls
+  /// over (plan 2.6). A restaurant serving until 3am sets this to e.g. 240 so
+  /// those orders report against the previous calendar day.
+  businessDayStartMinutes Int @default(0) @map("business_day_start_minutes")
+
+  /// Tenant configuration (ENGINEERING_SPEC.md 74): tax, service charge,
+  /// delivery fee, minimum order, acknowledgement timeout, notification
+  /// preferences. Kept as JSON so tenant behaviour is never hard-coded.
+  settings Json @default("{}")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  branches    Branch[]
+  memberships Membership[]
+  roles       Role[]
+  auditLogs   AuditLog[]
+
+  @@index([status])
+  @@map("organizations")
+}
+
+/// A physical location. Chains have many; a home kitchen has exactly one.
+model Branch {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  name      String       @db.VarChar(200)
+  slug      String       @db.VarChar(100)
+  address   String?
+  city      String?      @db.VarChar(100)
+  latitude  Decimal?     @db.Decimal(10, 7)
+  longitude Decimal?     @db.Decimal(10, 7)
+  phone     String?      @db.VarChar(32)
+  status    BranchStatus @default(ACTIVE)
+
+  /// Per-weekday opening hours, interpreted in the organization's timezone.
+  openingHours Json @default("{}") @map("opening_hours")
+
+  deliveryEnabled     Boolean @default(true) @map("delivery_enabled")
+  pickupEnabled       Boolean @default(true) @map("pickup_enabled")
+  dineInEnabled       Boolean @default(false) @map("dine_in_enabled")
+  reservationsEnabled Boolean @default(false) @map("reservations_enabled")
+
+  /// Branch-level overrides of Organization.settings. Null values inherit.
+  settings Json @default("{}")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organization       Organization         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membershipBranches MembershipBranch[]
+  menuOverrides      BranchMenuOverride[]
+  deliveryZones      DeliveryZone[]
+  carts              Cart[]
+  orders             Order[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, status])
+  @@map("branches")
+}
+
+// ---------------------------------------------------------------------------
+// Identity and RBAC (ENGINEERING_SPEC.md 9; plan 2.4)
+// ---------------------------------------------------------------------------
+
+/// Global user identity.
+///
+/// Deliberately NOT tenant-scoped, unlike spec 9's `users.tenant_id`. One
+/// person can work for two organizations — a delivery rider covering two home
+/// kitchens, an accountant serving several restaurants — and a tenant-scoped
+/// users table makes that impossible while also forcing a globally unique
+/// email into a tenant-scoped row. Tenant attachment lives in Membership.
+///
+/// This table is not tenant-owned and therefore has no RLS policy. All
+/// tenant-facing access to users goes through Membership, which does.
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique @db.VarChar(320)
+  phone        String?    @db.VarChar(32)
+  name         String     @db.VarChar(200)
+  passwordHash String     @map("password_hash")
+  status       UserStatus @default(ACTIVE)
+
+  /// Platform operator flag. Not a tenant role: it grants access to the
+  /// platform back office, never an implicit pass into tenant data
+  /// (see belongsToTenant in @restaurant-os/domain).
+  isPlatformAdmin Boolean @default(false) @map("is_platform_admin")
+
+  /// 2FA for privileged accounts (ENGINEERING_SPEC.md 5, 66).
+  twoFactorSecret    String?   @map("two_factor_secret")
+  twoFactorEnabledAt DateTime? @map("two_factor_enabled_at")
+
+  lastLoginAt      DateTime? @map("last_login_at")
+  failedLoginCount Int       @default(0) @map("failed_login_count")
+  lockedUntil      DateTime? @map("locked_until")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  memberships Membership[]
+  sessions    Session[]
+
+  @@index([status])
+  @@map("users")
+}
+
+/// Attaches a User to an Organization, and carries that user's roles there.
+model Membership {
+  id       String           @id @default(uuid()) @db.Uuid
+  tenantId String           @map("tenant_id") @db.Uuid
+  userId   String           @map("user_id") @db.Uuid
+  status   MembershipStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organization Organization       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roles        MembershipRole[]
+  branches     MembershipBranch[]
+  sessions     Session[]
+
+  @@unique([userId, tenantId])
+  @@index([tenantId, status])
+  @@map("memberships")
+}
+
+/// The branches a membership may act on (ENGINEERING_SPEC.md 7).
+///
+/// Absent rows for a branch-scoped role means "no access", not "all access" —
+/// see canAccessBranch in @restaurant-os/domain. Roles that are not branch
+/// scoped (OWNER, REGIONAL_MANAGER) ignore this table entirely.
+model MembershipBranch {
+  id           String @id @default(uuid()) @db.Uuid
+  tenantId     String @map("tenant_id") @db.Uuid
+  membershipId String @map("membership_id") @db.Uuid
+  branchId     String @map("branch_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, branchId])
+  @@index([tenantId])
+  @@index([branchId])
+  @@map("membership_branches")
+}
+
+/// A named bundle of permissions.
+///
+/// `tenantId = NULL` marks the eight system roles from spec 9, shared by every
+/// tenant. A non-null tenantId is a custom role owned by that organization.
+model Role {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String? @map("tenant_id") @db.Uuid
+  name        String  @db.VarChar(64)
+  description String?
+
+  /// True for the eight seeded system roles. System roles are immutable.
+  isSystem Boolean @default(false) @map("is_system")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organization Organization?    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permissions  RolePermission[]
+  memberships  MembershipRole[]
+
+  // Uniqueness for system roles (tenant_id IS NULL) needs a partial index,
+  // because Postgres treats NULLs as distinct. Added in the RLS/constraints
+  // migration as roles_system_name_unique.
+  @@unique([tenantId, name])
+  @@map("roles")
+}
+
+/// The permission catalogue. Global reference data, seeded from
+/// @restaurant-os/types so the code and the database cannot drift.
+model Permission {
+  id          String  @id @default(uuid()) @db.Uuid
+  key         String  @unique @db.VarChar(64)
+  description String?
+  category    String  @db.VarChar(32)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id       String  @id @default(uuid()) @db.Uuid
+  /// Mirrors Role.tenantId (NULL for system roles) so RLS can filter this
+  /// join table without a subquery on every row.
+  tenantId String? @map("tenant_id") @db.Uuid
+
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([tenantId])
+  @@map("role_permissions")
+}
+
+/// Roles held by a membership. Roles attach to the membership rather than the
+/// user, so the same person can be an OWNER in one organization and a CASHIER
+/// in another.
+model MembershipRole {
+  id           String @id @default(uuid()) @db.Uuid
+  tenantId     String @map("tenant_id") @db.Uuid
+  membershipId String @map("membership_id") @db.Uuid
+  roleId       String @map("role_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, roleId])
+  @@index([tenantId])
+  @@map("membership_roles")
+}
+
+// ---------------------------------------------------------------------------
+// Sessions (ENGINEERING_SPEC.md 5)
+// ---------------------------------------------------------------------------
+
+/// A logged-in session, one per (user, organization) login.
+///
+/// The refresh token is stored only as a SHA-256 hash: a database leak must
+/// not yield usable tokens. Rotation on refresh gives reuse detection —
+/// presenting a superseded token revokes the whole chain.
+///
+/// Not tenant-owned for RLS purposes: authentication necessarily runs before
+/// any tenant context exists. Access is confined to the auth module.
+model Session {
+  id           String @id @default(uuid()) @db.Uuid
+  userId       String @map("user_id") @db.Uuid
+  tenantId     String @map("tenant_id") @db.Uuid
+  membershipId String @map("membership_id") @db.Uuid
+
+  refreshTokenHash    String  @unique @map("refresh_token_hash") @db.VarChar(64)
+  /// Set when this token is rotated, pointing at its replacement, so that a
+  /// replayed old token can be traced to the chain it belongs to.
+  replacedBySessionId String? @map("replaced_by_session_id") @db.Uuid
+
+  userAgent String? @map("user_agent")
+  ipAddress String? @map("ip_address") @db.VarChar(64)
+
+  expiresAt     DateTime  @map("expires_at")
+  revokedAt     DateTime? @map("revoked_at")
+  revokedReason String?   @map("revoked_reason") @db.VarChar(64)
+  lastUsedAt    DateTime  @default(now()) @map("last_used_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Audit (ENGINEERING_SPEC.md 59)
+// ---------------------------------------------------------------------------
+
+/// Append-only record of consequential changes.
+///
+/// Insert-only by policy: there is no update or delete path, and the RLS
+/// policy grants INSERT and SELECT but never UPDATE or DELETE, so an
+/// application bug cannot rewrite history.
+model AuditLog {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @map("tenant_id") @db.Uuid
+
+  /// Null for unauthenticated events such as a failed login attempt.
+  actorId   String? @map("actor_id") @db.Uuid
+  actorType String  @default("USER") @map("actor_type") @db.VarChar(32)
+
+  action     AuditAction
+  entityType String      @map("entity_type") @db.VarChar(64)
+  entityId   String?     @map("entity_id") @db.Uuid
+
+  oldValues Json? @map("old_values")
+  newValues Json? @map("new_values")
+
+  ipAddress String? @map("ip_address") @db.VarChar(64)
+  userAgent String? @map("user_agent")
+  /// Correlates the audit row with the structured request log.
+  requestId String? @map("request_id") @db.VarChar(64)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  organization Organization? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Menu (ENGINEERING_SPEC.md 10)
+// ---------------------------------------------------------------------------
+
+enum MenuItemAvailability {
+  AVAILABLE
+  OUT_OF_STOCK
+  HIDDEN
+
+  @@map("menu_item_availability")
+}
+
+enum ModifierSelectionType {
+  SINGLE
+  MULTIPLE
+
+  @@map("modifier_selection_type")
+}
+
+model MenuCategory {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  name          String  @db.VarChar(200)
+  /// Localized names keyed by language, e.g. { "UR": "..." } (plan 2.3).
+  nameLocalized Json    @default("{}") @map("name_localized")
+  description   String?
+  imageUrl      String? @map("image_url")
+  sortOrder     Int     @default(0) @map("sort_order")
+  isActive      Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items MenuItem[]
+
+  @@index([tenantId, sortOrder])
+  @@map("menu_categories")
+}
+
+model MenuItem {
+  id         String  @id @default(uuid()) @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
+  categoryId String? @map("category_id") @db.Uuid
+
+  name          String  @db.VarChar(200)
+  nameLocalized Json    @default("{}") @map("name_localized")
+  description   String?
+  imageUrl      String? @map("image_url")
+
+  /// Tenant-wide list price. A branch may override it (BranchMenuOverride).
+  basePrice Decimal  @map("base_price") @db.Decimal(12, 2)
+  /// Ingredient cost, when the tenant tracks it. Feeds the estimated margin
+  /// figures in ENGINEERING_SPEC.md 47, which are always labelled estimates.
+  costPrice Decimal? @map("cost_price") @db.Decimal(12, 2)
+  currency  String   @default("PKR") @db.VarChar(3)
+
+  preparationTimeMinutes Int @default(15) @map("preparation_time_minutes")
+
+  /// Customer-facing state. A branch override may narrow it further.
+  availability MenuItemAvailability @default(AVAILABLE)
+  /// Administrative archive flag. Items are archived rather than deleted so
+  /// historical orders keep a resolvable reference.
+  isActive     Boolean              @default(true) @map("is_active")
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  category  MenuCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  variants  MenuItemVariant[]
+  modifiers MenuItemModifier[]
+  overrides BranchMenuOverride[]
+
+  @@index([tenantId, categoryId, sortOrder])
+  @@index([tenantId, availability])
+  @@map("menu_items")
+}
+
+model MenuItemVariant {
+  id         String @id @default(uuid()) @db.Uuid
+  /// Denormalised from the parent item so RLS can filter without a subquery.
+  tenantId   String @map("tenant_id") @db.Uuid
+  menuItemId String @map("menu_item_id") @db.Uuid
+
+  name      String  @db.VarChar(120)
+  price     Decimal @db.Decimal(12, 2)
+  isDefault Boolean @default(false) @map("is_default")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, name])
+  @@index([tenantId])
+  @@map("menu_item_variants")
+}
+
+/// A group of choices offered on an item, such as "Choose your sauce".
+///
+/// Named `modifiers` to match ENGINEERING_SPEC.md 10: each row is a group, and
+/// its individual choices live in ModifierOption.
+model Modifier {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  name          String                @db.VarChar(200)
+  selectionType ModifierSelectionType @default(SINGLE) @map("selection_type")
+  required      Boolean               @default(false)
+  minSelections Int                   @default(0) @map("min_selections")
+  maxSelections Int                   @default(1) @map("max_selections")
+  isActive      Boolean               @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  options   ModifierOption[]
+  menuItems MenuItemModifier[]
+
+  @@index([tenantId])
+  @@map("modifiers")
+}
+
+model ModifierOption {
+  id         String @id @default(uuid()) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
+  modifierId String @map("modifier_id") @db.Uuid
+
+  name        String  @db.VarChar(200)
+  /// Added to the line price when chosen. May be negative.
+  priceDelta  Decimal @default(0) @map("price_delta") @db.Decimal(12, 2)
+  isDefault   Boolean @default(false) @map("is_default")
+  isAvailable Boolean @default(true) @map("is_available")
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  modifier Modifier @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+
+  @@unique([modifierId, name])
+  @@index([tenantId])
+  @@map("modifier_options")
+}
+
+/// Links a modifier group to the items that offer it.
+///
+/// Absent from ENGINEERING_SPEC.md 10, which defines `modifiers` and
+/// `modifier_options` but nothing joining them to a menu item. Without this
+/// table the modifier system cannot function at all (plan 2.4).
+model MenuItemModifier {
+  id         String @id @default(uuid()) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
+  menuItemId String @map("menu_item_id") @db.Uuid
+  modifierId String @map("modifier_id") @db.Uuid
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  modifier Modifier @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, modifierId])
+  @@index([tenantId])
+  @@map("menu_item_modifiers")
+}
+
+/// Per-branch price and availability.
+///
+/// Also absent from spec v1, where price and availability are tenant-global.
+/// Chains price by city and run out of stock one branch at a time, and spec 86
+/// asks for "branch-aware availability" that the v1 schema cannot express
+/// (plan 2.4).
+///
+/// A NULL column means "inherit from the item", which is why both are nullable
+/// rather than defaulted.
+model BranchMenuOverride {
+  id         String @id @default(uuid()) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
+  branchId   String @map("branch_id") @db.Uuid
+  menuItemId String @map("menu_item_id") @db.Uuid
+
+  price        Decimal?              @db.Decimal(12, 2)
+  availability MenuItemAvailability?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  branch   Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, menuItemId])
+  @@index([tenantId])
+  @@map("branch_menu_overrides")
+}
+
+// ---------------------------------------------------------------------------
+// Outbox (ENGINEERING_SPEC.md 58)
+// ---------------------------------------------------------------------------
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+
+  @@map("outbox_status")
+}
+
+/// Domain events, written in the same transaction as the change they describe.
+///
+/// This is what prevents "database updated but event lost". A worker publishes
+/// these from Phase 4; until then the table is a durable, ordered record of
+/// what happened.
+model OutboxEvent {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  /// Monotonic publication order.
+  ///
+  /// A reconnecting client sends the last sequence it saw; anything higher than
+  /// expected means it missed events while disconnected and must refetch a full
+  /// snapshot rather than carry on with a hole in its state (plan 2.8).
+  sequence BigInt @unique @default(autoincrement())
+
+  eventType     String @map("event_type") @db.VarChar(64)
+  aggregateType String @map("aggregate_type") @db.VarChar(64)
+  aggregateId   String @map("aggregate_id") @db.Uuid
+
+  payload Json
+  /// User id, or a channel name such as WHATSAPP for unattended actors.
+  actor   String? @db.VarChar(64)
+
+  status    OutboxStatus @default(PENDING)
+  attempts  Int          @default(0)
+  lastError String?      @map("last_error")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  processedAt DateTime? @map("processed_at")
+
+  @@index([status, createdAt])
+  @@index([tenantId, aggregateType, aggregateId])
+  @@map("outbox_events")
+}
+
+// ---------------------------------------------------------------------------
+// Customers (ENGINEERING_SPEC.md 11)
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  name String? @db.VarChar(200)
+  /// The identity key for a customer. Normalised to E.164 before storage so
+  /// "0300-1234567" and "+923001234567" resolve to one person.
+  phone           String  @db.VarChar(32)
+  whatsappNumber  String? @map("whatsapp_number") @db.VarChar(32)
+  email           String? @db.VarChar(320)
+
+  /// Detected from their messages, used to pick a WhatsApp template language.
+  preferredLanguage Language @default(EN) @map("preferred_language")
+
+  /// Denormalised lifetime figures, maintained when an order completes.
+  /// Reporting reads orders directly; these exist so a CRM list does not need
+  /// an aggregate per row.
+  firstOrderAt DateTime? @map("first_order_at")
+  lastOrderAt  DateTime? @map("last_order_at")
+  totalOrders  Int       @default(0) @map("total_orders")
+  totalSpend   Decimal   @default(0) @map("total_spend") @db.Decimal(14, 2)
+
+  /// Staff-visible note, e.g. a delivery quirk. Not shown to the customer.
+  notes     String?
+  isBlocked Boolean @default(false) @map("is_blocked")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  addresses CustomerAddress[]
+  carts     Cart[]
+  orders    Order[]
+  consents  CustomerConsent[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId, lastOrderAt])
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id         String @id @default(uuid()) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
+  customerId String @map("customer_id") @db.Uuid
+
+  label     String?  @db.VarChar(64)
+  address   String
+  city      String?  @db.VarChar(100)
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+  notes     String?
+  isDefault Boolean  @default(false) @map("is_default")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orders   Order[]
+
+  @@index([tenantId, customerId])
+  @@map("customer_addresses")
+}
+
+// ---------------------------------------------------------------------------
+// Delivery zones (ENGINEERING_SPEC.md 29)
+// ---------------------------------------------------------------------------
+
+enum DeliveryZoneType {
+  RADIUS
+
+  @@map("delivery_zone_type")
+}
+
+/// Where a branch delivers, and what it charges to do so.
+///
+/// ENGINEERING_SPEC.md 29 requires a delivery radius and per-area fees in
+/// branch selection but defines nothing to store them (plan 2.4). Only circular
+/// zones are supported today; polygons can be added without changing callers
+/// because zone matching is a domain function, not a query.
+model DeliveryZone {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+
+  name String           @db.VarChar(120)
+  type DeliveryZoneType @default(RADIUS)
+
+  centerLatitude  Decimal? @map("center_latitude") @db.Decimal(10, 7)
+  centerLongitude Decimal? @map("center_longitude") @db.Decimal(10, 7)
+  radiusMetres    Int?     @map("radius_metres")
+
+  deliveryFee  Decimal  @default(0) @map("delivery_fee") @db.Decimal(12, 2)
+  minimumOrder Decimal? @map("minimum_order") @db.Decimal(12, 2)
+
+  /// Lower numbers win when zones overlap, so a cheap inner zone beats the
+  /// wider one it sits inside.
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, branchId])
+  @@map("delivery_zones")
+}
+
+// ---------------------------------------------------------------------------
+// Cart (ENGINEERING_SPEC.md 27)
+// ---------------------------------------------------------------------------
+
+enum CartStatus {
+  ACTIVE
+  CHECKED_OUT
+  ABANDONED
+
+  @@map("cart_status")
+}
+
+/// A cart in progress.
+///
+/// Totals are deliberately NOT stored. They are computed on every read from
+/// current menu prices, so a cart cannot quietly hold a stale total, and no
+/// client-supplied total is ever trusted (spec 27, invariant 3). Snapshotting
+/// happens exactly once, at checkout.
+model Cart {
+  id         String  @id @default(uuid()) @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
+  branchId   String  @map("branch_id") @db.Uuid
+  customerId String? @map("customer_id") @db.Uuid
+
+  source    OrderSource
+  orderType OrderType   @default(DELIVERY) @map("order_type")
+  status    CartStatus  @default(ACTIVE)
+
+  notes String?
+
+  /// Abandoned carts are swept after this. Also what stops a WhatsApp
+  /// conversation resuming a cart from three weeks ago.
+  expiresAt DateTime? @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  customer Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  branch   Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  items    CartItem[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, customerId, status])
+  @@map("carts")
+}
+
+model CartItem {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  cartId   String @map("cart_id") @db.Uuid
+
+  menuItemId String  @map("menu_item_id") @db.Uuid
+  variantId  String? @map("variant_id") @db.Uuid
+
+  quantity Int     @default(1)
+  notes    String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  cart      Cart               @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  modifiers CartItemModifier[]
+
+  @@index([tenantId, cartId])
+  @@map("cart_items")
+}
+
+model CartItemModifier {
+  id         String @id @default(uuid()) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
+  cartItemId String @map("cart_item_id") @db.Uuid
+
+  modifierId String @map("modifier_id") @db.Uuid
+  optionId   String @map("option_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  cartItem CartItem @relation(fields: [cartItemId], references: [id], onDelete: Cascade)
+
+  @@unique([cartItemId, optionId])
+  @@index([tenantId])
+  @@map("cart_item_modifiers")
+}
+
+// ---------------------------------------------------------------------------
+// Orders (ENGINEERING_SPEC.md 12, 13, 14, 15, 35)
+// ---------------------------------------------------------------------------
+
+enum OrderSource {
+  WHATSAPP
+  WEBSITE
+  QR
+  POS
+  PHONE
+  ADMIN
+
+  @@map("order_source")
+}
+
+enum OrderType {
+  DELIVERY
+  PICKUP
+  DINE_IN
+
+  @@map("order_type")
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING_PAYMENT
+  CONFIRMED
+  ACCEPTED
+  PREPARING
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  COMPLETED
+  DELIVERY_FAILED
+  RETURNED
+  CANCELLED
+  REJECTED
+
+  @@map("order_status")
+}
+
+enum PaymentStatus {
+  UNPAID
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+
+  @@map("payment_status")
+}
+
+enum PaymentMethod {
+  CASH
+  CARD_ON_DELIVERY
+  ONLINE
+
+  @@map("payment_method")
+}
+
+/// The central business entity.
+///
+/// Fulfilment state (`status`) and money state (`paymentStatus`) are separate
+/// columns, not one enum. Spec v1 mixes them; a refunded order that is still
+/// being cooked has no single valid value in that model (plan 2.5).
+model Order {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+
+  customerId String? @map("customer_id") @db.Uuid
+  addressId  String? @map("address_id") @db.Uuid
+
+  /// Human-readable, unique per branch per business day.
+  orderNumber String @map("order_number") @db.VarChar(32)
+
+  source        OrderSource
+  orderType     OrderType     @map("order_type")
+  status        OrderStatus   @default(DRAFT)
+  paymentStatus PaymentStatus @default(UNPAID) @map("payment_status")
+  paymentMethod PaymentMethod @map("payment_method")
+
+  /// The trading day this order belongs to, in the tenant's timezone and
+  /// respecting their rollover hour (plan 2.6). Analytics buckets on this, not
+  /// on created_at, or every late-night order lands in the wrong day.
+  businessDate DateTime @map("business_date") @db.Date
+
+  subtotal       Decimal @db.Decimal(12, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  serviceCharge  Decimal @default(0) @map("service_charge") @db.Decimal(12, 2)
+  deliveryFee    Decimal @default(0) @map("delivery_fee") @db.Decimal(12, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  total          Decimal @db.Decimal(12, 2)
+  currency       String  @default("PKR") @db.VarChar(3)
+
+  /// Contact details as given at order time. Snapshotted like prices: a
+  /// customer renaming themselves must not rewrite last month's receipts.
+  customerName  String? @map("customer_name") @db.VarChar(200)
+  customerPhone String  @map("customer_phone") @db.VarChar(32)
+
+  deliveryAddress   String?  @map("delivery_address")
+  deliveryLatitude  Decimal? @map("delivery_latitude") @db.Decimal(10, 7)
+  deliveryLongitude Decimal? @map("delivery_longitude") @db.Decimal(10, 7)
+
+  /// Dine-in table. The tables module arrives in Phase 10; the column exists
+  /// now so POS dine-in orders have somewhere to record it.
+  tableLabel String? @map("table_label") @db.VarChar(64)
+
+  notes String?
+  /// Why it was cancelled or rejected, shown to the customer.
+  cancellationReason String? @map("cancellation_reason")
+
+  /// Stage timestamps (ENGINEERING_SPEC.md 35). These are what make acceptance
+  /// delay, kitchen time and delivery time measurable.
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  confirmedAt  DateTime? @map("confirmed_at")
+  acceptedAt   DateTime? @map("accepted_at")
+  preparingAt  DateTime? @map("preparing_at")
+  readyAt      DateTime? @map("ready_at")
+  dispatchedAt DateTime? @map("dispatched_at")
+  completedAt  DateTime? @map("completed_at")
+  cancelledAt  DateTime? @map("cancelled_at")
+
+  customer Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  address  CustomerAddress? @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  branch   Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  items       OrderItem[]
+  history     OrderStatusHistory[]
+  escalations OrderEscalation[]
+
+  @@unique([tenantId, branchId, businessDate, orderNumber])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, branchId, businessDate])
+  @@index([tenantId, customerId, createdAt])
+  @@map("orders")
+}
+
+/// A line on an order, with the menu values SNAPSHOTTED (spec 13).
+///
+/// `menuItemId` is a soft reference kept for analytics; every value shown on a
+/// receipt is copied here at checkout. Changing a menu price must never rewrite
+/// a past order (invariant 5), which is why nothing on this row is resolved by
+/// joining back to the menu.
+model OrderItem {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  orderId  String @map("order_id") @db.Uuid
+
+  menuItemId String? @map("menu_item_id") @db.Uuid
+  variantId  String? @map("variant_id") @db.Uuid
+
+  itemNameSnapshot    String  @map("item_name_snapshot") @db.VarChar(200)
+  variantNameSnapshot String? @map("variant_name_snapshot") @db.VarChar(120)
+
+  /// Unit price including the variant, excluding modifiers.
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+  /// Sum of the chosen modifier deltas, for one unit.
+  modifiersTotal Decimal @default(0) @map("modifiers_total") @db.Decimal(12, 2)
+  quantity       Int
+  /// (unitPrice + modifiersTotal) * quantity
+  totalPrice Decimal @map("total_price") @db.Decimal(12, 2)
+
+  /// Cost at the time of sale, for the estimated margin in spec 47.
+  costPriceSnapshot Decimal? @map("cost_price_snapshot") @db.Decimal(12, 2)
+
+  notes String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  modifiers OrderItemModifier[]
+
+  @@index([tenantId, orderId])
+  @@index([tenantId, menuItemId])
+  @@map("order_items")
+}
+
+/// Chosen modifiers, snapshotted the same way (spec 14).
+model OrderItemModifier {
+  id          String @id @default(uuid()) @db.Uuid
+  tenantId    String @map("tenant_id") @db.Uuid
+  orderItemId String @map("order_item_id") @db.Uuid
+
+  modifierId String? @map("modifier_id") @db.Uuid
+  optionId   String? @map("option_id") @db.Uuid
+
+  modifierNameSnapshot String  @map("modifier_name_snapshot") @db.VarChar(200)
+  optionNameSnapshot   String  @map("option_name_snapshot") @db.VarChar(200)
+  priceDelta           Decimal @default(0) @map("price_delta") @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, orderItemId])
+  @@map("order_item_modifiers")
+}
+
+/// Every status change, including who made it and why.
+///
+/// The stage timestamps on `orders` answer "when did it reach READY"; this
+/// answers "who moved it, from what, and was anything skipped". Append-only,
+/// like audit_logs.
+model OrderStatusHistory {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  orderId  String @map("order_id") @db.Uuid
+
+  fromStatus OrderStatus? @map("from_status")
+  toStatus   OrderStatus  @map("to_status")
+
+  actorId   String? @map("actor_id") @db.Uuid
+  /// USER, SYSTEM, or a channel name such as WHATSAPP.
+  actorType String  @default("USER") @map("actor_type") @db.VarChar(32)
+  reason    String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, orderId, createdAt])
+  @@map("order_status_history")
+}
+
+/// Allocates human-readable order numbers.
+///
+/// A counter row per branch per business day. Incrementing it inside the order
+/// transaction takes a row lock, so two simultaneous checkouts at the same
+/// branch cannot be handed the same number.
+model OrderNumberCounter {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+
+  businessDate DateTime @map("business_date") @db.Date
+  lastNumber   Int      @default(0) @map("last_number")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([branchId, businessDate])
+  @@index([tenantId])
+  @@map("order_number_counters")
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency (ENGINEERING_SPEC.md 17)
+// ---------------------------------------------------------------------------
+
+enum IdempotencyStatus {
+  IN_PROGRESS
+  COMPLETED
+
+  @@map("idempotency_status")
+}
+
+/// Makes retried writes safe (spec 17, invariant 7).
+///
+/// A mobile client on a bad connection retries; without this it creates two
+/// orders. The first request claims the key and records its response; a repeat
+/// with the same key replays that response instead of executing again.
+///
+/// `requestHash` guards against a client reusing a key for a different payload,
+/// which is a bug worth reporting rather than silently honouring.
+model IdempotencyKey {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  key      String @db.VarChar(255)
+  endpoint String @db.VarChar(255)
+  /// SHA-256 of the request body.
+  requestHash String @map("request_hash") @db.VarChar(64)
+
+  status         IdempotencyStatus @default(IN_PROGRESS)
+  responseStatus Int?              @map("response_status")
+  responseBody   Json?             @map("response_body")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+  expiresAt   DateTime  @map("expires_at")
+
+  @@unique([tenantId, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// ---------------------------------------------------------------------------
+// Unacknowledged order protection (ENGINEERING_SPEC.md 33)
+// ---------------------------------------------------------------------------
+
+/// Who an escalation reaches. Each rung is louder than the last.
+enum EscalationTarget {
+  KITCHEN
+  BRANCH_MANAGER
+  OWNER
+
+  @@map("escalation_target")
+}
+
+/// A rung of the escalation ladder that actually fired.
+///
+/// ENGINEERING_SPEC.md 33 is the product's headline promise — no order goes
+/// unnoticed — and it needs a durable record rather than a queue job, for two
+/// reasons. A record survives a worker restart, so an escalation cannot be lost
+/// with the Redis job that was going to raise it. And it makes the ladder
+/// idempotent: a level that has already fired has a row, so a re-run cannot
+/// alert the same manager twice.
+model OrderEscalation {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+  orderId  String @map("order_id") @db.Uuid
+
+  level  Int
+  target EscalationTarget
+
+  /// How long the order had gone unacknowledged when this fired.
+  delaySeconds Int @map("delay_seconds")
+
+  /// Set when the order finally leaves CONFIRMED.
+  resolvedAt DateTime? @map("resolved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, level])
+  @@index([tenantId, branchId, resolvedAt])
+  @@map("order_escalations")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (ENGINEERING_SPEC.md 30, 31, 32)
+// ---------------------------------------------------------------------------
+
+enum NotificationChannel {
+  WHATSAPP
+  SMS
+  EMAIL
+  PUSH
+  DASHBOARD
+
+  @@map("notification_channel")
+}
+
+enum NotificationStatus {
+  PENDING
+  PROCESSING
+  SENT
+  DELIVERED
+  FAILED
+  SUPPRESSED
+
+  @@map("notification_status")
+}
+
+enum RecipientType {
+  CUSTOMER
+  STAFF
+
+  @@map("recipient_type")
+}
+
+/// A single message owed to one person on one channel.
+///
+/// Invariant 8: creating an order must never depend on a notification being
+/// delivered. So nothing here is written during checkout. A worker reads the
+/// outbox after the fact, creates these rows, and retries them with backoff. A
+/// WhatsApp outage delays a message; it cannot fail an order.
+model Notification {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @map("tenant_id") @db.Uuid
+  branchId String? @map("branch_id") @db.Uuid
+
+  /// The outbox event that caused this. Together with the recipient and the
+  /// channel it is unique, which is what makes the dispatcher safe to re-run
+  /// after a crash — reprocessing an event creates no second message.
+  eventId   String @map("event_id") @db.Uuid
+  eventType String @map("event_type") @db.VarChar(64)
+
+  recipientType RecipientType @map("recipient_type")
+  /// A customer id or a user id, depending on recipientType. Deliberately NOT
+  /// nullable: Postgres treats NULLs as distinct in a unique index, so a
+  /// nullable recipient would quietly defeat the idempotency above.
+  recipientId String @map("recipient_id") @db.Uuid
+  /// Where it was actually sent — a phone number or an email address, resolved
+  /// at send time and then frozen, so a customer changing their number does not
+  /// rewrite the history of what was sent where.
+  destination String? @db.VarChar(320)
+
+  channel NotificationChannel
+  /// Message key, e.g. `order_confirmed`. Resolves to both the session-message
+  /// copy and the approved template (packages/domain/src/notifications.ts).
+  templateKey String @map("template_key") @db.VarChar(64)
+  /// The variables, plus the body as rendered, for support and for replay.
+  payload Json @default("{}")
+
+  status   NotificationStatus @default(PENDING)
+  attempts Int                @default(0)
+  /// When to try next. Null once the notification is finished, one way or
+  /// another, which is also what keeps the partial index small.
+  nextAttemptAt DateTime? @map("next_attempt_at")
+  lastError     String?   @map("last_error")
+  /// Why a SUPPRESSED notification was never attempted: no consent, or a closed
+  /// service window with no approved template. Deliberately distinct from an
+  /// error — nothing failed, the rules said no.
+  suppressedReason String? @map("suppressed_reason")
+
+  /// The provider's id for the sent message, which is what a delivery callback
+  /// arrives quoting.
+  providerMessageId String? @map("provider_message_id") @db.VarChar(128)
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  sentAt      DateTime? @map("sent_at")
+  deliveredAt DateTime? @map("delivered_at")
+  failedAt    DateTime? @map("failed_at")
+
+  @@unique([eventId, recipientType, recipientId, channel])
+  @@index([status, nextAttemptAt])
+  @@index([tenantId, createdAt])
+  @@map("notifications")
+}
+
+/// Per-consumer progress through the outbox.
+///
+/// The outbox now has two readers: the realtime publisher fans events out to
+/// Redis, and the notification dispatcher turns them into messages. A single
+/// `status` column cannot serve both — whichever marked a row PROCESSED first
+/// would hide it from the other, and the symptom would be missing notifications
+/// rather than an error.
+///
+/// So the second consumer keeps its own watermark and reads the outbox as an
+/// ordered log. The publisher keeps using `status`, which suits it: an
+/// ephemeral fan-out where a duplicate is a harmless re-render.
+model OutboxCursor {
+  /// Consumer name, e.g. `notifications`.
+  consumer     String   @id @db.VarChar(64)
+  lastSequence BigInt   @default(0) @map("last_sequence")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("outbox_cursors")
+}
+
+/// Which channels a tenant uses, and for whom.
+///
+/// ENGINEERING_SPEC.md 74: never hard-code tenant behaviour. A home kitchen with
+/// no SMS contract and a chain with the full stack must not need different code.
+/// Absence of a row means the channel's default applies, so a new tenant needs
+/// no seeding to work.
+model NotificationPreference {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  recipientType RecipientType       @map("recipient_type")
+  channel       NotificationChannel
+  enabled       Boolean             @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, recipientType, channel])
+  @@map("notification_preferences")
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp (plan 2.2)
+// ---------------------------------------------------------------------------
+
+enum WhatsAppTemplateCategory {
+  UTILITY
+  MARKETING
+  AUTHENTICATION
+
+  @@map("whatsapp_template_category")
+}
+
+enum WhatsAppTemplateStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  PAUSED
+  DISABLED
+
+  @@map("whatsapp_template_status")
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+
+  @@map("message_direction")
+}
+
+enum WhatsAppSendMode {
+  SESSION
+  TEMPLATE
+
+  @@map("whatsapp_send_mode")
+}
+
+/// A tenant's WhatsApp Business number.
+///
+/// **Missing from spec v1 and on the critical path** (plan 2.4). Meta's webhook
+/// is per-app, not per-tenant: every restaurant's inbound messages and delivery
+/// receipts arrive at one endpoint, and the only way to tell whose they are is
+/// to map the receiving `phone_number_id` back to a tenant. Without this table
+/// inbound WhatsApp cannot be routed at all.
+model WhatsAppAccount {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @map("tenant_id") @db.Uuid
+  /// Optional: a chain may run one number per branch, a home kitchen one in
+  /// total. Null means the number serves the whole tenant.
+  branchId String? @map("branch_id") @db.Uuid
+
+  /// The provider's identifier for this number — what inbound webhooks carry.
+  /// Globally unique, because that is what makes routing unambiguous.
+  phoneNumberId String  @unique @map("phone_number_id") @db.VarChar(64)
+  /// The number itself, E.164, for display in the dashboard.
+  displayNumber String  @map("display_number") @db.VarChar(32)
+  /// WhatsApp Business Account id at the provider.
+  wabaId        String? @map("waba_id") @db.VarChar(64)
+
+  /// Which adapter sends for this account: `log`, `cloud-api`, or a BSP name.
+  /// Config, not code — moving a tenant between providers changes a row.
+  provider String @default("log") @db.VarChar(32)
+  /// Provider credentials. Encryption at rest is a deployment concern; keeping
+  /// them in their own column means a careless `select *` on a dashboard path is
+  /// at least visible in review.
+  credentials Json @default("{}")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  templates WhatsAppTemplate[]
+  messages  WhatsAppMessage[]
+
+  @@index([tenantId])
+  @@map("whatsapp_accounts")
+}
+
+/// A message template registered with the provider.
+///
+/// Approval is asynchronous and can be *rejected*, which makes it an onboarding
+/// blocker rather than a detail: until a template is APPROVED, no order update
+/// can reach a customer whose 24-hour window has closed (plan 2.2). The
+/// dashboard has to be able to show a restaurant that this is why their
+/// customers stopped hearing from them.
+model WhatsAppTemplate {
+  id        String @id @default(uuid()) @db.Uuid
+  tenantId  String @map("tenant_id") @db.Uuid
+  accountId String @map("account_id") @db.Uuid
+
+  /// Our key, e.g. `order_confirmed` — the same key the domain layer uses.
+  templateKey  String   @map("template_key") @db.VarChar(64)
+  /// The provider's name for it, which need not match ours.
+  providerName String   @map("provider_name") @db.VarChar(128)
+  /// Templates are approved per language, so one key exists once per language.
+  language     Language @default(EN)
+
+  category WhatsAppTemplateCategory
+  status   WhatsAppTemplateStatus   @default(DRAFT)
+  /// Meta's reason for a rejection, shown to the restaurant verbatim.
+  rejectionReason String? @map("rejection_reason")
+
+  /// The body with {{1}} placeholders, for preview and for review.
+  body String
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  approvedAt DateTime? @map("approved_at")
+
+  account WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, templateKey, language])
+  @@index([tenantId, status])
+  @@map("whatsapp_templates")
+}
+
+/// Every WhatsApp message, in both directions.
+///
+/// Inbound rows are what make the 24-hour service window computable at all: the
+/// window is open when this contact's most recent INBOUND message is less than a
+/// day old. Outbound rows carry the provider id that delivery callbacks quote.
+model WhatsAppMessage {
+  id        String @id @default(uuid()) @db.Uuid
+  tenantId  String @map("tenant_id") @db.Uuid
+  accountId String @map("account_id") @db.Uuid
+
+  customerId    String? @map("customer_id") @db.Uuid
+  /// The contact's number, E.164. Present even when no customer record exists
+  /// yet, which is exactly the case for a first-time inbound message.
+  contactNumber String  @map("contact_number") @db.VarChar(32)
+
+  direction MessageDirection
+  /// Only meaningful for outbound: which of the two send modes was used.
+  sendMode  WhatsAppSendMode? @map("send_mode")
+
+  /// The provider's message id. Unique, so a replayed webhook cannot create a
+  /// second row (ENGINEERING_SPEC.md 68).
+  providerMessageId String? @unique @map("provider_message_id") @db.VarChar(128)
+
+  templateKey String? @map("template_key") @db.VarChar(64)
+  body        String?
+  /// The raw provider payload, kept for support and for replaying a parse bug
+  /// against real traffic.
+  raw         Json    @default("{}")
+
+  /// Delivery state as last reported by a callback: sent, delivered, read,
+  /// failed. A free string because it is the provider's vocabulary, not ours.
+  status String? @db.VarChar(32)
+  error  String?
+
+  occurredAt  DateTime  @default(now()) @map("occurred_at")
+  deliveredAt DateTime? @map("delivered_at")
+  readAt      DateTime? @map("read_at")
+
+  account WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, contactNumber, direction, occurredAt])
+  @@index([tenantId, customerId])
+  @@map("whatsapp_messages")
+}
+
+enum ConsentStatus {
+  GRANTED
+  REVOKED
+
+  @@map("consent_status")
+}
+
+/// Proof that a customer agreed to be contacted (plan 2.4).
+///
+/// ENGINEERING_SPEC.md 51 says "respect opt-out preferences". Meta requires
+/// demonstrable opt-IN for marketing, which is stricter, and the gap between the
+/// two is an account-level risk rather than a nicety — so this records *when*
+/// and *how* consent was given, not merely a boolean.
+///
+/// Order updates do not consult it: the customer asked for the food.
+model CustomerConsent {
+  id         String @id @default(uuid()) @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
+  customerId String @map("customer_id") @db.Uuid
+
+  channel NotificationChannel
+  /// MARKETING is the one that legally requires opt-in. A string rather than an
+  /// enum so a later purpose needs no migration.
+  purpose String        @default("MARKETING") @db.VarChar(32)
+  status  ConsentStatus
+
+  /// How it was obtained: `WHATSAPP_REPLY`, `WEB_FORM`, `POS`, `IMPORT`.
+  source   String  @db.VarChar(32)
+  /// Free-text evidence, e.g. the exact message the customer sent. This is the
+  /// part that matters if the consent is ever challenged.
+  evidence String?
+
+  grantedAt DateTime? @map("granted_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, channel, purpose])
+  @@index([tenantId])
+  @@map("customer_consents")
+}
+
+/// Replay protection for every inbound webhook (ENGINEERING_SPEC.md 68).
+///
+/// The generic sibling of `payment_events`: WhatsApp, payment and delivery
+/// providers all need the same event-id deduplication, and giving each its own
+/// table would be three chances to get idempotency subtly wrong.
+///
+/// `tenantId` is nullable because it is not yet known when the row is written —
+/// a webhook arrives unauthenticated and is routed afterwards, and one whose
+/// `phone_number_id` matches no account must still be recorded rather than
+/// dropped, or an onboarding misconfiguration looks exactly like silence.
+model InboundWebhookEvent {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @map("tenant_id") @db.Uuid
+
+  provider        String @db.VarChar(32)
+  /// The provider's own event id. Unique per provider, which is the whole
+  /// mechanism: a replayed delivery receipt becomes a no-op insert.
+  providerEventId String @map("provider_event_id") @db.VarChar(128)
+  eventType       String @map("event_type") @db.VarChar(64)
+
+  payload Json
+  /// Null until handled, so a crash part-way through is visible rather than
+  /// indistinguishable from success.
+  processedAt DateTime? @map("processed_at")
+  error       String?
+
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  @@unique([provider, providerEventId])
+  @@index([processedAt])
+  @@map("inbound_webhook_events")
+}

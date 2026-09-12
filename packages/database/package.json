@@ -1,0 +1,33 @@
+{
+  "name": "@restaurant-os/database",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "db:generate": "prisma generate",
+    "db:migrate": "node scripts/prisma.mjs migrate dev",
+    "db:deploy": "node scripts/prisma.mjs migrate deploy",
+    "db:reset": "node scripts/prisma.mjs migrate reset --force",
+    "db:status": "node scripts/prisma.mjs migrate status",
+    "db:studio": "node scripts/prisma.mjs studio",
+    "db:seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.2.0",
+    "@restaurant-os/types": "*",
+    "@restaurant-os/domain": "*"
+  },
+  "devDependencies": {
+    "prisma": "^6.2.0",
+    "tsx": "^4.19.0",
+    "vitest": "^3.0.0",
+    "argon2": "^0.41.0"
+  }
+}

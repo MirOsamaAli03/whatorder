@@ -1,0 +1,45 @@
+{
+  "name": "restaurant-os",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "npm@11.6.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
+    "test:integration": "turbo run test:integration",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,yml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json,yml}\"",
+    "db:generate": "npm run db:generate -w @restaurant-os/database",
+    "db:migrate": "npm run db:migrate -w @restaurant-os/database",
+    "db:deploy": "npm run db:deploy -w @restaurant-os/database",
+    "db:reset": "npm run db:reset -w @restaurant-os/database",
+    "db:status": "npm run db:status -w @restaurant-os/database",
+    "db:seed": "npm run db:seed -w @restaurant-os/database",
+    "db:studio": "npm run db:studio -w @restaurant-os/database",
+    "wsl:setup": "wsl -e bash -lc \"bash $(wslpath -a ./infrastructure/wsl/setup.sh)\"",
+    "wsl:sync-env": "node infrastructure/wsl/sync-env.mjs",
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
+    "test:e2e:ui": "playwright test --config tests/e2e/playwright.config.ts --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.18.0",
+    "wait-on": "^8.0.0"
+  }
+}

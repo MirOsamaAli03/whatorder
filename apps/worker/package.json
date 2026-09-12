@@ -1,0 +1,28 @@
+{
+  "name": "@restaurant-os/worker",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@restaurant-os/database": "*",
+    "@restaurant-os/domain": "*",
+    "@restaurant-os/notifications": "*",
+    "@restaurant-os/whatsapp": "*",
+    "@restaurant-os/types": "*",
+    "ioredis": "^5.4.0",
+    "pino": "^9.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "vitest": "^3.0.0",
+    "pino-pretty": "^13.0.0"
+  }
+}
