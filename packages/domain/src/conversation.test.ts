@@ -167,11 +167,66 @@ describe('resolveIntent', () => {
     expect(resolved.reply).toEqual({ action: ReplyAction.QUANTITY, value: '3' });
   });
 
-  it('treats the same number as an order type while choosing one', () => {
-    // The state is what makes "1" readable at all.
-    const resolved = resolveIntent({ text: '1' }, ConversationState.SELECTING_ORDER_TYPE);
+  it('selects the nth thing that was actually shown', () => {
+    // Customers type the number far more often than you would expect, and the
+    // only way to read it correctly is to know what was on their screen.
+    const context = {
+      shownReplyIds: ['item:burger-1', 'item:fries-2', 'more'],
+    };
+
+    expect(resolveIntent({ text: '2' }, ConversationState.BROWSING_MENU, context)).toEqual({
+      intent: ConversationIntent.ADD_TO_CART,
+      reply: { action: ReplyAction.ITEM, value: 'fries-2' },
+    });
+  });
+
+  it('reads an order-type number from the buttons offered, not from a fixed table', () => {
+    // The bug this replaced: a pickup-only branch shows one button, "Pickup",
+    // and a positional table read "1" as DELIVERY — an order type the branch
+    // does not offer, refused after the customer had already chosen it.
+    const pickupOnly = { shownReplyIds: [`type:${OrderType.PICKUP}`] };
+
+    const resolved = resolveIntent(
+      { text: '1' },
+      ConversationState.SELECTING_ORDER_TYPE,
+      pickupOnly,
+    );
+
     expect(resolved.intent).toBe(ConversationIntent.SELECT_ORDER_TYPE);
-    expect(resolved.reply?.value).toBe(OrderType.DELIVERY);
+    expect(resolved.reply?.value).toBe(OrderType.PICKUP);
+  });
+
+  it('still reads a delivery-first branch the obvious way', () => {
+    const both = {
+      shownReplyIds: [`type:${OrderType.DELIVERY}`, `type:${OrderType.PICKUP}`],
+    };
+
+    expect(
+      resolveIntent({ text: '1' }, ConversationState.SELECTING_ORDER_TYPE, both).reply?.value,
+    ).toBe(OrderType.DELIVERY);
+    expect(
+      resolveIntent({ text: '2' }, ConversationState.SELECTING_ORDER_TYPE, both).reply?.value,
+    ).toBe(OrderType.PICKUP);
+  });
+
+  it('ignores a number past the end of what was shown', () => {
+    // Better to say "I did not catch that" than to act on a row that was never
+    // on the screen.
+    const context = { shownReplyIds: ['item:burger-1'] };
+    expect(resolveIntent({ text: '7' }, ConversationState.BROWSING_MENU, context).intent).toBe(
+      ConversationIntent.UNKNOWN,
+    );
+  });
+
+  it('lets a quantity beat the displayed options', () => {
+    // Three buttons are offered, but "5" is a legitimate answer to "how many?"
+    // and must not be capped by what happened to fit on screen.
+    const context = { shownReplyIds: ['qty:1', 'qty:2', 'qty:3'] };
+
+    expect(resolveIntent({ text: '5' }, ConversationState.BUILDING_CART, context)).toEqual({
+      intent: ConversationIntent.ADD_TO_CART,
+      reply: { action: ReplyAction.QUANTITY, value: '5' },
+    });
   });
 
   it('takes anything typed at the address prompt as the address', () => {

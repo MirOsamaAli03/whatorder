@@ -10,7 +10,13 @@ coverage/
 .env
 .env.local
 .env.*.local
+# Every .env variant, so a deployment file cannot be committed by accident.
+# The two *.example templates are the deliberate exceptions.
+.env.production
+.env.staging
+.env.*
 !.env.example
+!.env.production.example
 
 npm-debug.log*
 pnpm-debug.log*

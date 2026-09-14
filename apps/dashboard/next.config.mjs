@@ -1,6 +1,26 @@
+import path from 'node:path';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+
+  /**
+   * Bundles a minimal server into .next/standalone for the container image.
+   *
+   * Without it the runtime image needs the whole node_modules tree; with it the
+   * dashboard ships as a few megabytes and a single `node server.js`.
+   */
+  output: 'standalone',
+
+  /**
+   * Trace from the repository root, not from this app.
+   *
+   * In a workspace the shared packages live above the app directory, and
+   * standalone output silently omits anything outside the traced root — which
+   * surfaces as MODULE_NOT_FOUND for @restaurant-os/types at container start,
+   * long after the build looked fine.
+   */
+  outputFileTracingRoot: path.join(import.meta.dirname, '../../'),
 
   /**
    * The shared packages ship as CommonJS from tsc. Next compiles them as part

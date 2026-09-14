@@ -1,0 +1,16 @@
+# Normalise line endings.
+#
+# Checked in as LF, checked out as the platform prefers — except where LF is
+# load-bearing. A shell script with CRLF fails inside a Linux container with
+# "bad interpreter: /bin/bash^M", which is an opaque way to lose a deployment,
+# and Docker treats a CRLF in a Dockerfile as part of the command.
+* text=auto
+
+*.sh text eol=lf
+Dockerfile* text eol=lf
+Caddyfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+.env.example text eol=lf
+.env.production.example text eol=lf

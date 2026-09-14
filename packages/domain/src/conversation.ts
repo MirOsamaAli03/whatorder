@@ -1,8 +1,4 @@
-import {
-  ConversationIntent,
-  ConversationState,
-  OrderType,
-} from '@restaurant-os/types';
+import { ConversationIntent, ConversationState } from '@restaurant-os/types';
 
 /**
  * The WhatsApp conversation engine's rules (ENGINEERING_SPEC.md 21, 22, 23).
@@ -306,6 +302,7 @@ export interface ResolvedIntent {
 export function resolveIntent(
   input: NormalizedInput,
   state: ConversationState,
+  context: ConversationContext = {},
 ): ResolvedIntent {
   const reply = parseReplyId(input.replyId);
   if (reply) {
@@ -325,22 +322,26 @@ export function resolveIntent(
     return { intent: ConversationIntent.PROVIDE_ADDRESS, query: text };
   }
 
-  // A bare number is a list selection or a quantity, depending on where we are.
+  // A bare number means whatever was in that position on the customer's
+  // screen. Checked in this order deliberately.
   if (/^\d{1,2}$/.test(lowered)) {
+    // A quantity first: "5" is a legitimate answer to "how many?" even though
+    // only three buttons were offered, so the displayed options must not cap
+    // it.
     if (state === ConversationState.BUILDING_CART) {
       return {
         intent: ConversationIntent.ADD_TO_CART,
         reply: { action: ReplyAction.QUANTITY, value: lowered },
       };
     }
-    if (state === ConversationState.SELECTING_ORDER_TYPE) {
-      const orderType = ORDER_TYPE_BY_INDEX[lowered];
-      if (orderType) {
-        return {
-          intent: ConversationIntent.SELECT_ORDER_TYPE,
-          reply: { action: ReplyAction.ORDER_TYPE, value: orderType },
-        };
-      }
+
+    // Otherwise it selects the nth thing actually shown — a menu row, a
+    // category, an order type. Reading it from what was displayed rather than
+    // from a fixed table is what keeps it right when the options are filtered.
+    const shown = context.shownReplyIds?.[Number(lowered) - 1];
+    const selected = parseReplyId(shown);
+    if (selected) {
+      return { intent: REPLY_INTENTS[selected.action], reply: selected };
     }
   }
 
@@ -379,13 +380,6 @@ const SEARCHABLE_STATES: ReadonlySet<ConversationState> = new Set([
   ConversationState.BUILDING_CART,
 ]);
 
-/** Positions in the order-type prompt, so "1" works as well as a tap. */
-const ORDER_TYPE_BY_INDEX: Readonly<Record<string, OrderType>> = {
-  '1': OrderType.DELIVERY,
-  '2': OrderType.PICKUP,
-  '3': OrderType.DINE_IN,
-};
-
 function matchedIntent(lowered: string): ConversationIntent | null {
   const words = new Set(lowered.split(/[^a-z0-9]+/).filter(Boolean));
 
@@ -422,6 +416,17 @@ export interface ConversationContext {
   categoryId?: string;
   /** Which page of a long list the customer is on. */
   page?: number;
+  /**
+   * The reply ids of the rows and buttons last offered, in the order shown.
+   *
+   * This is what makes typing "1" work. A customer looking at a numbered list
+   * types the number rather than tapping far more often than you would expect,
+   * and the only way to read it correctly is to know what was actually on their
+   * screen — a fixed positional map guesses, and guesses wrong the moment the
+   * options are filtered (a pickup-only branch shows one button, and "1" must
+   * mean pickup, not delivery).
+   */
+  shownReplyIds?: string[];
   /** The order type chosen at checkout, for the confirmation wording. */
   orderType?: string;
   /**

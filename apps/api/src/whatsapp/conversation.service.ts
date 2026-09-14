@@ -138,11 +138,20 @@ export class ConversationService {
     }
 
     const input: NormalizedInput = { text: turn.text, replyId: turn.replyId };
-    const resolved = resolveIntent(input, session.state);
+    const resolved = resolveIntent(input, session.state, session.context);
 
     try {
       const outcome = await this.dispatch(auth, turn, session, resolved);
-      await this.save(turn, session.id, outcome.state, outcome.context);
+
+      // Derived from the messages actually going out, rather than set by each
+      // handler. Nine call sites would each have to remember, and the one that
+      // forgot would leave a customer typing "2" at a list that silently
+      // resolved against whatever was on screen two turns ago.
+      await this.save(turn, session.id, outcome.state, {
+        ...outcome.context,
+        shownReplyIds: shownReplyIdsFrom(outcome.messages),
+      });
+
       return outcome.messages;
     } catch (error) {
       // A failure here is a conversation that stops mid-order, which the
@@ -302,11 +311,13 @@ export class ConversationService {
             sections: [
               {
                 title: 'Menu',
-                rows: pageSlice(categories, 0).map((category) => ({
-                  id: encodeReplyId(ReplyAction.CATEGORY, category.id),
-                  title: category.name,
-                  ...(category.description ? { description: category.description } : {}),
-                })),
+                rows: numberedRows(
+                  pageSlice(categories, 0).map((category) => ({
+                    id: encodeReplyId(ReplyAction.CATEGORY, category.id),
+                    title: category.name,
+                    ...(category.description ? { description: category.description } : {}),
+                  })),
+                ),
               },
             ],
           }),
@@ -335,9 +346,11 @@ export class ConversationService {
       messages: [
         listMessage({
           to: turn.contactNumber,
-          body: chosen ? `${chosen.name} — tap a dish to add it.` : 'Tap a dish to add it.',
+          body: chosen
+            ? `${chosen.name} — tap a dish, or reply with its number.`
+            : 'Tap a dish, or reply with its number.',
           buttonLabel: 'View dishes',
-          sections: [{ title: chosen?.name ?? 'Menu', rows }],
+          sections: [{ title: chosen?.name ?? 'Menu', rows: numberedRows(rows) }],
         }),
       ],
     };
@@ -378,11 +391,13 @@ export class ConversationService {
           sections: [
             {
               title: 'Matches',
-              rows: pageSlice(matches, 0).map((item) => ({
-                id: encodeReplyId(ReplyAction.ITEM, item.id),
-                title: item.name,
-                description: `${item.currency} ${item.price}`,
-              })),
+              rows: numberedRows(
+                pageSlice(matches, 0).map((item) => ({
+                  id: encodeReplyId(ReplyAction.ITEM, item.id),
+                  title: item.name,
+                  description: `${item.currency} ${item.price}`,
+                })),
+              ),
             },
           ],
         }),
@@ -925,6 +940,39 @@ export class ConversationService {
       }),
     );
   }
+}
+
+/**
+ * Numbers the rows of a list, so typing "2" is discoverable.
+ *
+ * WhatsApp truncates a row title at 24 characters and the prefix eats three of
+ * them, which is the trade: a slightly shorter dish name in exchange for a list
+ * that can be answered without tapping. Customers type the number constantly.
+ */
+function numberedRows(
+  rows: Array<{ id: string; title: string; description?: string }>,
+): Array<{ id: string; title: string; description?: string }> {
+  return rows.map((row, index) => ({ ...row, title: `${index + 1}. ${row.title}` }));
+}
+
+/**
+ * The reply ids on the customer's screen after this turn, in order.
+ *
+ * Only the last interactive message counts: if a turn sends a sentence and then
+ * a set of buttons, the buttons are what they are looking at.
+ */
+function shownReplyIdsFrom(messages: readonly OutboundMessage[]): string[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+
+    if (message.kind === 'list') {
+      return message.sections.flatMap((section) => section.rows.map((row) => row.id));
+    }
+    if (message.kind === 'buttons') {
+      return message.buttons.map((button) => button.id);
+    }
+  }
+  return [];
 }
 
 interface LoadedSession {

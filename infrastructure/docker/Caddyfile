@@ -1,0 +1,45 @@
+# TLS and routing for a pilot deployment.
+#
+# Caddy obtains and renews Let's Encrypt certificates on its own, which matters
+# more than it sounds: Meta refuses to deliver webhooks to plain HTTP, so an
+# expired certificate is not a degraded experience, it is a restaurant that
+# stops receiving orders. One less thing to remember.
+#
+# Both domains must already point at this machine — certificate issuance is an
+# HTTP challenge and will fail otherwise.
+
+{$API_DOMAIN} {
+	# The API serves JSON and the WhatsApp webhook.
+	reverse_proxy api:3001 {
+		# Rate limiting and audit logging both key on the caller's address, and
+		# the application sets trustProxy — so it reads these rather than seeing
+		# every request arrive from the proxy.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+
+		# The kitchen display holds a Server-Sent Events stream open for as long
+		# as the screen is on. The default flush behaviour buffers it, so orders
+		# would arrive in batches whenever the buffer happened to fill — which
+		# reads as a kitchen screen that is simply broken.
+		flush_interval -1
+	}
+
+	encode gzip
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$DASHBOARD_DOMAIN} {
+	reverse_proxy dashboard:3000 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	encode gzip
+	log {
+		output stdout
+		format json
+	}
+}

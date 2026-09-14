@@ -1,0 +1,69 @@
+# The dashboard.
+#
+# Its own image because Next builds to a standalone server rather than to a
+# `dist` directory, and because the API URL has to be baked in at build time
+# (see below) — which means this image is environment-specific in a way the
+# Node image is not.
+FROM node:22-slim AS base
+
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+FROM base AS build
+
+ENV NODE_ENV=development
+
+COPY package.json package-lock.json turbo.json tsconfig.base.json ./
+COPY apps/api/package.json ./apps/api/
+COPY apps/worker/package.json ./apps/worker/
+COPY apps/dashboard/package.json ./apps/dashboard/
+COPY packages/types/package.json ./packages/types/
+COPY packages/domain/package.json ./packages/domain/
+COPY packages/database/package.json ./packages/database/
+COPY packages/notifications/package.json ./packages/notifications/
+COPY packages/whatsapp/package.json ./packages/whatsapp/
+
+RUN npm ci
+
+COPY packages ./packages
+COPY apps/dashboard ./apps/dashboard
+
+# The API URL is compiled into the browser bundle, not read at run time.
+#
+# NEXT_PUBLIC_* values are substituted during `next build`, so setting this as a
+# container environment variable does nothing — the bundle already contains
+# whatever was present when it was built. Passing it as a build argument is the
+# only thing that works, and getting it wrong produces a dashboard that loads and
+# then cannot reach the API from the browser, with no server-side error to
+# explain it.
+ARG NEXT_PUBLIC_API_URL=http://127.0.0.1:3001
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+RUN npx turbo run build --filter=@restaurant-os/dashboard
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+FROM base AS runtime
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+# Standalone output: a minimal server plus only the files actually traced as
+# reachable. The workspace packages come along because next.config.mjs traces
+# from the repository root.
+COPY --from=build /app/apps/dashboard/.next/standalone ./
+COPY --from=build /app/apps/dashboard/.next/static ./apps/dashboard/.next/static
+
+# No public/ directory in this app. If one is added, copy it here too —
+# standalone output does not include it.
+
+USER node
+
+EXPOSE 3000
+
+CMD ["node", "apps/dashboard/server.js"]

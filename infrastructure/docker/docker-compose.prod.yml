@@ -1,0 +1,176 @@
+# A complete deployment: database, cache, API, worker, dashboard, TLS.
+#
+# Enough to run a pilot on a single small VPS. It is deliberately one machine —
+# a restaurant taking a few hundred orders a day does not need more, and the
+# operational surface of one box is something one person can hold in their head.
+#
+#   docker compose -f docker-compose.prod.yml --env-file ../../.env.production up -d
+#
+# See docs/DEPLOYMENT.md. The one thing that cannot be changed later without a
+# rebuild is DASHBOARD_ORIGIN, because the API URL is compiled into the browser
+# bundle.
+
+name: restaurant-os
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: restaurant_owner
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?set POSTGRES_OWNER_PASSWORD}
+      POSTGRES_DB: restaurant_os
+      # Passed through to the init scripts, which create the two least-privilege
+      # roles the application and worker connect as.
+      APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD}
+      WORKER_PASSWORD: ${POSTGRES_WORKER_PASSWORD:?set POSTGRES_WORKER_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    # No published port. The database is reachable only from this compose
+    # network; exposing 5432 to the internet is how a pilot becomes an incident.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U restaurant_owner -d restaurant_os']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # A one-shot job, not a long-running service.
+  #
+  # Migrations run as the OWNER role, which the application deliberately is not,
+  # and they must finish before the API starts — an API booting against a schema
+  # it does not recognise fails in ways that look like application bugs.
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.node
+    restart: 'no'
+    environment:
+      DATABASE_URL_ADMIN: postgresql://restaurant_owner:${POSTGRES_OWNER_PASSWORD}@postgres:5432/restaurant_os?schema=public
+    command: ['node', 'packages/database/scripts/prisma.mjs', 'migrate', 'deploy']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.node
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Three roles, three connection strings. The API's own boot guard refuses
+      # to start if DATABASE_URL turns out to be the owner, because Row-Level
+      # Security would then silently stop applying.
+      DATABASE_URL: postgresql://restaurant_app:${POSTGRES_APP_PASSWORD}@postgres:5432/restaurant_os?schema=public
+      DATABASE_URL_ADMIN: postgresql://restaurant_owner:${POSTGRES_OWNER_PASSWORD}@postgres:5432/restaurant_os?schema=public
+      REDIS_URL: redis://redis:6379
+
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET}
+
+      # Browsers treat these as different origins, so the dashboard's exact
+      # scheme and host must be listed or every request fails CORS in a way that
+      # looks like the API being down.
+      CORS_ORIGINS: ${DASHBOARD_ORIGIN:?set DASHBOARD_ORIGIN}
+
+      # Without the secret every inbound webhook is accepted unverified.
+      WHATSAPP_WEBHOOK_SECRET: ${WHATSAPP_WEBHOOK_SECRET:?set WHATSAPP_WEBHOOK_SECRET}
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${WHATSAPP_WEBHOOK_VERIFY_TOKEN:?set WHATSAPP_WEBHOOK_VERIFY_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Separate from the API on purpose: a slow notification retry or a long
+  # escalation sweep must never occupy a request handler, and this can be
+  # restarted without dropping a single customer request.
+  worker:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.node
+    restart: unless-stopped
+    command: ['node', 'apps/worker/dist/main.js']
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Both connections. The worker role answers the cross-tenant question —
+      # which tenant has work — and every step that touches a customer runs on
+      # the application connection under RLS.
+      DATABASE_URL_WORKER: postgresql://restaurant_worker:${POSTGRES_WORKER_PASSWORD}@postgres:5432/restaurant_os?schema=public
+      DATABASE_URL: postgresql://restaurant_app:${POSTGRES_APP_PASSWORD}@postgres:5432/restaurant_os?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.dashboard
+      args:
+        # Baked into the browser bundle at build time. Changing it later needs a
+        # rebuild, not a restart.
+        NEXT_PUBLIC_API_URL: ${API_ORIGIN:?set API_ORIGIN}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+
+  # Terminates TLS and routes to the two apps.
+  #
+  # Caddy rather than nginx for one reason: it obtains and renews Let's Encrypt
+  # certificates by itself. Meta will not deliver a webhook to plain HTTP, so
+  # working TLS is not a nicety here — it is the difference between receiving
+  # orders and not.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN}
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:?set DASHBOARD_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - dashboard
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

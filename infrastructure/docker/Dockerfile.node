@@ -1,0 +1,74 @@
+# The API and the worker.
+#
+# One image, two commands: both processes are built from the same monorepo and
+# differ only in which entry point they run, so building them twice would be two
+# chances for them to drift apart on a dependency.
+#
+# Debian slim rather than Alpine, deliberately: Prisma ships native query
+# engines linked against glibc and openssl, and the Alpine builds are a
+# recurring source of "Could not locate the Query Engine" at container start —
+# which is a boot failure in production for a saving of about 60MB.
+FROM node:22-slim AS base
+
+# Prisma needs openssl at runtime, not just to build.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+FROM base AS build
+
+# Dev dependencies are needed to compile; NODE_ENV stays development until the
+# build is done or npm skips them.
+ENV NODE_ENV=development
+
+# Manifests first, so a source-only change does not reinstall the world. Every
+# workspace's package.json has to be present before `npm ci` will resolve the
+# workspace graph.
+COPY package.json package-lock.json turbo.json tsconfig.base.json ./
+COPY apps/api/package.json ./apps/api/
+COPY apps/worker/package.json ./apps/worker/
+COPY apps/dashboard/package.json ./apps/dashboard/
+COPY packages/types/package.json ./packages/types/
+COPY packages/domain/package.json ./packages/domain/
+COPY packages/database/package.json ./packages/database/
+COPY packages/notifications/package.json ./packages/notifications/
+COPY packages/whatsapp/package.json ./packages/whatsapp/
+
+RUN npm ci
+
+COPY packages ./packages
+COPY apps/api ./apps/api
+COPY apps/worker ./apps/worker
+
+# Generates the Prisma client and compiles every workspace the two processes
+# need. The dashboard is a separate image and is not built here.
+RUN npx turbo run build --filter=@restaurant-os/api --filter=@restaurant-os/worker
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+FROM base AS runtime
+
+# Everything, including dev dependencies.
+#
+# Pruning them would drop the Prisma CLI, and `prisma migrate deploy` has to run
+# from somewhere — a migration job that cannot reach the CLI is a deployment
+# that cannot start. The image is larger than it needs to be as a result; that
+# is a deliberate trade for a pilot, and the note in docs/DEPLOYMENT.md says so.
+COPY --from=build /app /app
+
+# Never root: a compromised Node process should not own the filesystem it runs
+# on. The base image ships a `node` user for exactly this.
+USER node
+
+EXPOSE 3001
+
+# Overridden per service in the compose file — the worker runs
+# `node apps/worker/dist/main.js` instead.
+CMD ["node", "apps/api/dist/main.js"]

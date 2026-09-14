@@ -59,6 +59,9 @@ You need PostgreSQL 16 and Redis 7 first — see
 [docs/LOCAL_SETUP.md](./docs/LOCAL_SETUP.md) (Docker) or
 [docs/WSL_SETUP.md](./docs/WSL_SETUP.md) (Windows without Docker).
 
+To deploy, see [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md): one machine running
+the database, cache, API, worker, dashboard and automatic TLS.
+
 Seeded sign-ins, password `RestaurantOS123!`:
 
 | Account | Role |
@@ -81,7 +84,7 @@ packages/
   whatsapp/     WhatsAppProvider interface, interactive messages, dev sender
   notifications/ Channel adapters, the dispatcher and the sender
 infrastructure/
-  docker/       docker-compose for Postgres and Redis
+  docker/       docker-compose for Postgres and Redis, plus production images
   wsl/          The same two services on WSL2, for Windows without Docker
 docs/
 ```

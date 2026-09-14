@@ -1,0 +1,26 @@
+# Keeps the build context small and, more importantly, keeps local state out of
+# the image: a copied .env would bake development secrets into every layer.
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+.turbo
+**/.turbo
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+.git
+.github
+test-results
+playwright-report
+tests/e2e
+
+docs
+*.md
+!README.md

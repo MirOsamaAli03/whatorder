@@ -190,6 +190,29 @@ the 24-hour window and why templates are the long pole, how to connect a number,
 what to check when nothing arrives, the limitations that stand at pilot, and a
 go-live checklist.
 
+### B-29. The production images are unbuilt
+
+**Phase:** deployment · **Status:** written, never run
+
+`infrastructure/docker/Dockerfile.node`, `Dockerfile.dashboard` and
+`docker-compose.prod.yml` were written on a machine without Docker. They are
+reviewed and structurally checked — every `depends_on` resolves, every variable
+is documented, and the Next standalone server was run directly to prove that
+half of the dashboard image — but **no image has been built**.
+
+Expect to fix something on the first `docker compose build`.
+[DEPLOYMENT.md](./DEPLOYMENT.md) lists the likely causes in order.
+
+**Needs:** one build on a machine with Docker, then a deployment to a real host.
+
+### B-30. No automated backups
+
+**Phase:** deployment · **Status:** documented, not automated
+
+The database is the only thing that cannot be rebuilt from the repository.
+DEPLOYMENT.md gives the `pg_dump` line; nothing runs it, and nothing copies it
+off the machine. This is the gap that would hurt most on the day it matters.
+
 ### B-28. An unanswered handoff does not reach a phone
 
 **Phase:** 6 · **Status:** new, split from B-24

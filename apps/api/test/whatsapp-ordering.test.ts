@@ -407,6 +407,95 @@ describe('whatsapp ordering', () => {
     });
   });
 
+  /**
+   * The whole order placed by typing numbers, never tapping.
+   *
+   * A customer looking at a numbered list types the number constantly, and
+   * until this worked they got "Sorry, I did not catch that" at the first step.
+   */
+  describe('ordering by typing numbers', () => {
+    const typer = '923004443322';
+
+    async function typerSays(text: string): Promise<OutboundMessage[]> {
+      const before = provider.messages().length;
+
+      const response = await context.app.inject({
+        method: 'POST',
+        url: '/api/v1/webhooks/whatsapp',
+        payload: {
+          entry: [
+            {
+              changes: [
+                {
+                  value: {
+                    metadata: { phone_number_id: phoneNumberId },
+                    messages: [
+                      {
+                        id: `wamid-${randomUUID()}`,
+                        from: typer,
+                        timestamp: String(Math.floor(Date.now() / 1000)),
+                        type: 'text',
+                        text: { body: text },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      return provider.messages().slice(before).map((logged) => logged.message);
+    }
+
+    it('numbers the dishes so the list can be answered without tapping', async () => {
+      await typerSays('menu');
+      const replies = await typerSays('menu');
+      const list = replies.find((message) => message.kind === 'list');
+
+      const titles =
+        list?.kind === 'list' ? list.sections.flatMap((s) => s.rows.map((r) => r.title)) : [];
+
+      expect(titles[0]).toMatch(/^1\. /);
+      expect(titles[1]).toMatch(/^2\. /);
+    });
+
+    it('takes the order through to a placed order, by number alone', async () => {
+      const chosen = await typerSays('1');
+      expect(bodies(chosen)).toContain('How many');
+
+      const added = await typerSays('2');
+      expect(bodies(added)).toContain('2 x');
+
+      await typerSays('checkout');
+
+      // The branch offers delivery and pickup, so "2" is pickup — read from the
+      // buttons that were actually shown.
+      const picked = await typerSays('2');
+      expect(bodies(picked)).toContain('Pickup');
+      expect(bodies(picked)).toContain('cash on delivery');
+
+      const placed = await typerSays('yes');
+      expect(bodies(placed)).toContain('is placed');
+
+      const order = await context.admin.order.findFirstOrThrow({
+        where: { tenantId: tenant.organizationId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      expect(order.orderType).toBe(OrderType.PICKUP);
+      expect(order.source).toBe(OrderSource.WHATSAPP);
+      expect(order.status).toBe(OrderStatus.CONFIRMED);
+    });
+
+    it('does not act on a number that was never on the screen', async () => {
+      const replies = await typerSays('9');
+      expect(bodies(replies)).toContain('did not catch that');
+    });
+  });
+
   describe('the boundaries', () => {
     it('goes quiet once a person takes over', async () => {
       const handoff = await say('I want to talk to a human');
