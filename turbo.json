@@ -1,15 +1,31 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": ["NODE_ENV"],
+  "//": "Turborepo runs every task in a sanitised environment: anything not listed here is stripped. A variable the application reads but that is missing from this list is undefined inside a task — which does not show up locally, because the test harness loads the repository's .env from disk, and does show up in CI, where no .env exists. env-passthrough.test.ts fails the build if the two ever drift apart again.",
   "globalPassThroughEnv": [
     "DATABASE_URL",
     "DATABASE_URL_ADMIN",
+    "DATABASE_URL_WORKER",
     "REDIS_URL",
     "JWT_ACCESS_SECRET",
     "JWT_REFRESH_SECRET",
+    "JWT_ACCESS_TTL",
+    "JWT_REFRESH_TTL",
     "PORT",
     "LOG_LEVEL",
-    "CORS_ORIGINS"
+    "CORS_ORIGINS",
+    "RATE_LIMIT_AUTH_PER_MINUTE",
+    "RATE_LIMIT_DEFAULT_PER_MINUTE",
+    "WHATSAPP_WEBHOOK_SECRET",
+    "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+    "WORKER_OUTBOX_POLL_MS",
+    "WORKER_OUTBOX_BATCH_SIZE",
+    "WORKER_ESCALATION_POLL_MS",
+    "WORKER_NOTIFICATION_DISPATCH_POLL_MS",
+    "WORKER_NOTIFICATION_SEND_POLL_MS",
+    "WORKER_NOTIFICATION_BATCH_SIZE",
+    "WORKER_NOTIFICATION_STALE_CLAIM_MS",
+    "NEXT_PUBLIC_API_URL"
   ],
   "tasks": {
     "build": {
