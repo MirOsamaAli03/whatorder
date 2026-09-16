@@ -302,7 +302,13 @@ test.describe('live orders', () => {
     await signIn(page, OWNER);
     await selectBranch(page, 'DHA');
 
-    await page.getByRole('button', { name: order.orderNumber }).click();
+    // .last(), not an exact match on the number.
+    //
+    // Order numbers are unique per branch per BUSINESS DATE, not for all time,
+    // so a long-lived database has several orders called DHA-0011 and a strict
+    // locator resolves to more than one. The newest is the one this test just
+    // placed.
+    await page.getByRole('button', { name: order.orderNumber }).last().click();
 
     await expect(page.getByRole('heading', { name: 'Items' })).toBeVisible();
     await expect(page.getByText('2 × Chicken Biryani')).toBeVisible();
@@ -380,22 +386,29 @@ test.describe('kitchen display', () => {
     await selectBranch(page, 'DHA');
 
     const order = await placeOrder();
-    const card = page.locator('.kds-card', { hasText: order.orderNumber });
-    await expect(card).toBeVisible({ timeout: 30_000 });
 
-    await card.getByRole('button', { name: 'Accept' }).click();
+    const inNew = page
+      .getByRole('region', { name: 'New' })
+      .locator('.kds-card', { hasText: order.orderNumber });
+
+    // Order numbers repeat across business dates, so a long-lived database can
+    // have an older card carrying the same number still sitting in New. The
+    // newest is the one this test just placed.
+    await expect(inNew.last()).toBeVisible({ timeout: 30_000 });
+    const before = await inNew.count();
+
+    await inNew.last().getByRole('button', { name: 'Accept' }).click();
 
     await expect(
       page
         .getByRole('region', { name: 'Accepted' })
-        .locator('.kds-card', { hasText: order.orderNumber }),
+        .locator('.kds-card', { hasText: order.orderNumber })
+        .last(),
     ).toBeVisible({ timeout: 20_000 });
 
-    await expect(
-      page.getByRole('region', { name: 'New' }).locator('.kds-card', {
-        hasText: order.orderNumber,
-      }),
-    ).toHaveCount(0);
+    // One fewer than before rather than none at all: the assertion is that this
+    // card left the column, not that no card ever shared its number.
+    await expect(inNew).toHaveCount(before - 1);
   });
 
   test('shows a ticking timer on each card', async ({ page }) => {
@@ -404,7 +417,9 @@ test.describe('kitchen display', () => {
     await selectBranch(page, 'DHA');
 
     const order = await placeOrder();
-    const card = page.locator('.kds-card', { hasText: order.orderNumber });
+    // .last() for the same reason as above: order numbers repeat across
+    // business dates, and the kitchen screen shows whatever is still active.
+    const card = page.locator('.kds-card', { hasText: order.orderNumber }).last();
     await expect(card).toBeVisible({ timeout: 30_000 });
 
     const timer = card.locator('.kds-timer');
