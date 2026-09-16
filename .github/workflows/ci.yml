@@ -18,6 +18,16 @@ env:
   JWT_REFRESH_SECRET: ci_refresh_secret_that_is_at_least_32_characters
   NODE_ENV: test
 
+  # The browser job serves the dashboard on :3000 and the API on :3001, which a
+  # browser treats as different origins. With this unset the schema defaults it
+  # to empty, CORS is disabled outright, the login preflight is answered with a
+  # 404 and no allow-origin header, and every browser test times out at sign-in
+  # having never got past the login form.
+  #
+  # Both loopback spellings, because http://localhost and http://127.0.0.1 are
+  # also different origins to a browser.
+  CORS_ORIGINS: http://127.0.0.1:3000,http://localhost:3000
+
 jobs:
   verify:
     runs-on: ubuntu-latest
