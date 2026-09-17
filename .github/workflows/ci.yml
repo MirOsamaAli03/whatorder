@@ -28,6 +28,17 @@ env:
   # also different origins to a browser.
   CORS_ORIGINS: http://127.0.0.1:3000,http://localhost:3000
 
+  # The browser suite signs in once or more per test, all from one address, and
+  # the schema's default is 10 sign-ins per minute per IP. Without this the API
+  # answers 429 part-way through and the remaining tests fail at the login form
+  # with a navigation timeout that looks like a broken dashboard.
+  #
+  # The limiter is not being disabled, only widened: it still runs on every
+  # request here, and rate-limit.test.ts drives it down deliberately to prove it
+  # refuses. vitest.config.ts does the same for the integration suite.
+  RATE_LIMIT_AUTH_PER_MINUTE: '100000'
+  RATE_LIMIT_DEFAULT_PER_MINUTE: '100000'
+
 jobs:
   verify:
     runs-on: ubuntu-latest

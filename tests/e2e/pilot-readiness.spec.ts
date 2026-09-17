@@ -125,10 +125,14 @@ test.describe('pilot readiness', () => {
   });
 
   test.afterAll(async () => {
-    const accounts = (await apiCall(token, '/notifications/whatsapp/accounts')).data as Array<{
-      id: string;
-      phoneNumberId: string;
-    }>;
+    const response = await apiCall(token, '/notifications/whatsapp/accounts');
+
+    // A failed call returns an error envelope rather than a list, and cleanup
+    // throwing would replace a real test failure with a confusing one about
+    // teardown.
+    const accounts = Array.isArray(response.data)
+      ? (response.data as Array<{ id: string; phoneNumberId: string }>)
+      : [];
 
     for (const account of accounts) {
       if (account.phoneNumberId === phoneNumberId) {
