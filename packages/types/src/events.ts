@@ -38,6 +38,16 @@ export const DomainEventType = {
    * distinguishable event rather than a repeated one.
    */
   ORDER_ACKNOWLEDGEMENT_TIMEOUT: 'OrderAcknowledgementTimeout',
+
+  /**
+   * A customer asked for a person and nobody replied (backlog B-28).
+   *
+   * The conversational sibling of ORDER_ACKNOWLEDGEMENT_TIMEOUT. An
+   * unacknowledged order escalates; an unanswered customer did not, which made
+   * "somebody will reply here shortly" depend on a member of staff happening to
+   * have the inbox open.
+   */
+  CONVERSATION_HANDOFF_UNANSWERED: 'ConversationHandoffUnanswered',
 } as const;
 
 export type DomainEventType = (typeof DomainEventType)[keyof typeof DomainEventType];
@@ -50,6 +60,7 @@ export const AggregateType = {
   MENU_ITEM: 'MenuItem',
   CART: 'Cart',
   CUSTOMER: 'Customer',
+  CONVERSATION: 'Conversation',
 } as const;
 
 export type AggregateType = (typeof AggregateType)[keyof typeof AggregateType];

@@ -211,6 +211,16 @@ export class ConversationsService {
       textMessage(conversation.contactNumber, body.body),
     ]);
 
+    // Somebody answered, so the alarm is cleared — and a second silence after
+    // this reply can raise it again. Leaving it set would mean a conversation
+    // escalates once and then never again, however long it is abandoned for.
+    await this.prisma.forTenant(auth.tenantId, (tx) =>
+      tx.conversationSession.updateMany({
+        where: { id },
+        data: { handoffEscalatedAt: null },
+      }),
+    );
+
     await this.audit.record({
       action: AuditAction.UPDATE,
       entityType: 'ConversationSession',
@@ -242,7 +252,12 @@ export class ConversationsService {
 
       await tx.conversationSession.updateMany({
         where: { id },
-        data: { state: ConversationState.IDLE, context: {} },
+        data: {
+          state: ConversationState.IDLE,
+          context: {},
+          // The handoff is over, so the alarm clock is reset for the next one.
+          handoffEscalatedAt: null,
+        },
       });
 
       await this.audit.recordIn(tx, {

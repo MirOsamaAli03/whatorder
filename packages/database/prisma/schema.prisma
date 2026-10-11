@@ -1636,6 +1636,14 @@ model ConversationSession {
   /// moves when the bot replies.
   lastInboundAt DateTime? @map("last_inbound_at")
 
+  /// When the alarm was raised for a handoff nobody answered (backlog B-28).
+  ///
+  /// A timestamp rather than a boolean, and the thing that makes the sweep
+  /// idempotent: a conversation with one set has already woken somebody, so a
+  /// second pass — or a second worker — does not wake them again. Cleared when
+  /// the handoff ends, so the next one starts with a clean clock.
+  handoffEscalatedAt DateTime? @map("handoff_escalated_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

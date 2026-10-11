@@ -6,6 +6,7 @@ import {
 } from '@restaurant-os/database';
 import {
   ESCALATION_NOTIFICATION,
+  HANDOFF_NOTIFICATION,
   notificationForOrderStatus,
   type MessageVariables,
   type NotificationSpec,
@@ -194,6 +195,10 @@ export class NotificationDispatcher {
       return ESCALATION_NOTIFICATION;
     }
 
+    if (eventType === DomainEventType.CONVERSATION_HANDOFF_UNANSWERED) {
+      return HANDOFF_NOTIFICATION;
+    }
+
     if (eventType !== DomainEventType.ORDER_STATUS_CHANGED) return null;
 
     const toStatus = readString(payload, 'toStatus');
@@ -210,6 +215,15 @@ export class NotificationDispatcher {
     spec: NotificationSpec,
     payload: Prisma.JsonValue,
   ): Promise<number> {
+    // Not every notification is about an order.
+    //
+    // An unanswered handoff is about a conversation, and loading an order for
+    // it would find nothing and silently tell nobody — which is exactly the
+    // failure the alarm exists to prevent.
+    if (eventType === DomainEventType.CONVERSATION_HANDOFF_UNANSWERED) {
+      return this.planHandoffNotifications(tx, tenantId, eventId, eventType, spec, payload);
+    }
+
     const orderId = readString(payload, 'orderId');
     if (!orderId) return 0;
 
@@ -333,6 +347,92 @@ export class NotificationDispatcher {
     // skipDuplicates, not a failed insert: replaying an event is expected after
     // a crash, and it must be a no-op rather than an error that stalls the
     // cursor forever.
+    const result = await tx.notification.createMany({ data: rows, skipDuplicates: true });
+    return result.count;
+  }
+
+  /**
+   * Staff notifications for a customer nobody has answered (backlog B-28).
+   *
+   * Runs on the tenant-scoped application connection, so unlike the worker that
+   * raised the event it *can* read the conversation and name the customer —
+   * which is the whole reason the two halves are split.
+   */
+  private async planHandoffNotifications(
+    tx: TransactionClient,
+    tenantId: string,
+    eventId: string,
+    eventType: string,
+    spec: NotificationSpec,
+    payload: Prisma.JsonValue,
+  ): Promise<number> {
+    const conversationId = readString(payload, 'conversationId');
+    if (!conversationId) return 0;
+
+    const conversation = await tx.conversationSession.findUnique({
+      where: { id: conversationId },
+      select: { id: true, branchId: true, state: true, externalUserId: true },
+    });
+
+    // Answered between the sweep and this pass: say nothing. Waking somebody
+    // about a conversation a colleague already handled is how an alarm earns
+    // the right to be ignored.
+    if (!conversation || conversation.state !== 'HUMAN_HANDOFF') return 0;
+
+    const [organization, branch] = await Promise.all([
+      tx.organization.findUnique({ where: { id: tenantId }, select: { name: true } }),
+      conversation.branchId
+        ? tx.branch.findUnique({
+            where: { id: conversation.branchId },
+            select: { name: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const preferences = await tx.notificationPreference.findMany({ where: { tenantId } });
+    const enabled = (channel: NotificationChannel): boolean =>
+      preferences.find(
+        (row) => row.recipientType === RecipientType.STAFF && row.channel === channel,
+      )?.enabled ?? true;
+
+    const staff = conversation.branchId
+      ? await this.staffFor(tx, tenantId, conversation.branchId)
+      : [];
+
+    const variables: MessageVariables = {
+      contact: conversation.externalUserId,
+      orderNumber: '',
+      restaurantName: organization?.name ?? 'the restaurant',
+      branchName: branch?.name ?? null,
+    };
+
+    const rows: Prisma.NotificationCreateManyInput[] = [];
+
+    for (const member of staff) {
+      for (const channel of this.channelsFor(spec, (channel) => {
+        if (!enabled(channel)) return false;
+        if (channel === NotificationChannel.DASHBOARD) return true;
+        return Boolean(member.phone);
+      })) {
+        rows.push({
+          tenantId,
+          branchId: conversation.branchId,
+          eventId,
+          eventType,
+          recipientType: RecipientType.STAFF,
+          recipientId: member.id,
+          destination: channel === NotificationChannel.DASHBOARD ? member.id : member.phone,
+          channel,
+          templateKey: spec.templateKey,
+          payload: { variables } as unknown as Prisma.InputJsonValue,
+          status: NotificationStatus.PENDING,
+          nextAttemptAt: new Date(),
+        });
+      }
+    }
+
+    if (rows.length === 0) return 0;
+
     const result = await tx.notification.createMany({ data: rows, skipDuplicates: true });
     return result.count;
   }

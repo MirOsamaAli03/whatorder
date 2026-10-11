@@ -260,6 +260,7 @@ export function notificationForOrderStatus(status: OrderStatus): NotificationSpe
  */
 export function notificationSpecByTemplateKey(templateKey: string): NotificationSpec | null {
   if (templateKey === ESCALATION_NOTIFICATION.templateKey) return ESCALATION_NOTIFICATION;
+  if (templateKey === HANDOFF_NOTIFICATION.templateKey) return HANDOFF_NOTIFICATION;
   return (
     Object.values(ORDER_NOTIFICATIONS).find((spec) => spec.templateKey === templateKey) ?? null
   );
@@ -275,6 +276,33 @@ export const NOTIFYING_ORDER_STATUSES = Object.keys(ORDER_NOTIFICATIONS) as Orde
  * restaurant has not noticed an order, and telling the customer that would be
  * worse than useless.
  */
+/**
+ * How long a customer may wait for a person before the alarm is raised
+ * (backlog B-28).
+ *
+ * Five minutes. Shorter than it sounds: the customer has already given up on
+ * the bot, so the clock starts from somebody who is actively annoyed. A
+ * restaurant can override it in settings, the same as the order
+ * acknowledgement timeout.
+ */
+export const DEFAULT_HANDOFF_RESPONSE_SECONDS = 300;
+
+/**
+ * Nobody answered a customer who asked for a person.
+ *
+ * Staff only, and every channel at once for the same reason the order alarm
+ * fans out: the conversations inbox being unwatched is precisely the situation
+ * that raised this.
+ */
+export const HANDOFF_NOTIFICATION: NotificationSpec = {
+  templateKey: 'conversation_unanswered',
+  category: WhatsAppTemplateCategory.UTILITY,
+  channels: [NotificationChannel.DASHBOARD, NotificationChannel.WHATSAPP, NotificationChannel.SMS],
+  deliveryMode: 'all-channels',
+  notifyCustomer: false,
+  notifyStaff: true,
+};
+
 export const ESCALATION_NOTIFICATION: NotificationSpec = {
   templateKey: 'order_unacknowledged',
   category: WhatsAppTemplateCategory.UTILITY,
@@ -291,6 +319,8 @@ export const ESCALATION_NOTIFICATION: NotificationSpec = {
 
 export interface MessageVariables {
   customerName?: string | null;
+  /** The customer's number, for a message to staff about a conversation. */
+  contact?: string | null;
   orderNumber: string;
   restaurantName: string;
   branchName?: string | null;
@@ -335,6 +365,12 @@ export function renderMessageBody(templateKey: string, variables: MessageVariabl
       }`;
     case 'order_unacknowledged':
       return `Order ${order} at ${variables.branchName ?? restaurant} has not been acknowledged. Please check the kitchen screen.`;
+    case 'conversation_unanswered':
+      return (
+        `${variables.contact ?? 'A customer'} asked to speak to someone at ` +
+        `${variables.branchName ?? restaurant} and is still waiting. ` +
+        `Please open Conversations in the dashboard.`
+      );
     default:
       return `Update on order ${order} from ${restaurant}.`;
   }
@@ -352,6 +388,11 @@ export function templateVariables(
   variables: MessageVariables,
 ): string[] {
   switch (templateKey) {
+    case 'conversation_unanswered':
+      return [
+        variables.contact ?? 'A customer',
+        variables.branchName ?? variables.restaurantName,
+      ];
     case 'order_unacknowledged':
       return [variables.orderNumber, variables.branchName ?? variables.restaurantName];
     case 'order_cancelled':
