@@ -496,6 +496,55 @@ describe('whatsapp ordering', () => {
     });
   });
 
+  /**
+   * A dish the conversation cannot finish must never be offered.
+   *
+   * Found by running the containerised stack against the seeded demo menu: the
+   * customer tapped a dish with a required "Portion" group, went through
+   * quantity, order type and confirmation, and checkout refused the whole
+   * order with "choose at least 1 option" — which the conversation can only
+   * report as "something went wrong on our side". Six steps to a dead end.
+   */
+  describe('dishes that need a choice (backlog B-26)', () => {
+    it('hides an item whose modifier group is required', async () => {
+      const withChoice = await post('/api/v1/menu/items', {
+        name: 'Biryani Needs A Portion',
+        basePrice: '600.00',
+      });
+      const itemId = withChoice.json().data.id;
+
+      const modifier = await post('/api/v1/menu/modifiers', {
+        name: 'Portion',
+        selectionType: 'SINGLE',
+        required: true,
+        minSelections: 1,
+        maxSelections: 1,
+        options: [
+          { name: 'Half', priceDelta: '0.00' },
+          { name: 'Full', priceDelta: '300.00' },
+        ],
+      });
+
+      expect(modifier.statusCode, JSON.stringify(modifier.json())).toBe(201);
+
+      const attached = await context.app.inject({
+        method: 'PUT',
+        url: `/api/v1/menu/items/${itemId}/modifiers`,
+        headers: authHeaders(ownerToken),
+        payload: { modifierIds: [modifier.json().data.id] },
+      });
+      expect(attached.statusCode, JSON.stringify(attached.json())).toBe(200);
+
+      const replies = await say('menu');
+      const list = replies.find((message) => message.kind === 'list');
+
+      // Offered on the POS and the dashboard, which can ask the question;
+      // not here, where the flow has no way to.
+      expect(rowIds(list!)).not.toContain(`item:${itemId}`);
+      expect(rowIds(list!)).toContain(`item:${burgerId}`);
+    });
+  });
+
   describe('the boundaries', () => {
     it('goes quiet once a person takes over', async () => {
       const handoff = await say('I want to talk to a human');

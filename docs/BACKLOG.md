@@ -65,7 +65,7 @@ already has.
 
 ### B-26. Modifiers and variants cannot be chosen in the conversation
 
-**Phase:** 6 · **Status:** deliberate scope limit
+**Phase:** 6 · **Status:** deliberate scope limit, now handled safely
 
 The cart and order services fully support variants and modifier groups, and the
 POS and dashboard expose them. The WhatsApp flow adds an item at its base price
@@ -73,8 +73,18 @@ with no options, because asking "which size?" and "any extras?" over reply
 buttons is several more states and the deterministic flow was worth landing
 first.
 
-A restaurant whose menu is mostly single-price dishes — most home kitchens — is
-unaffected. One selling pizzas by size is not really usable over WhatsApp yet.
+**This was worse than first recorded.** A dish with a REQUIRED modifier group
+was offered, tapped, given a quantity, an order type and an address — and then
+refused at the final step by checkout with "choose at least 1 option", which
+the conversation could only report as "something went wrong on our side". Six
+steps to a dead end. Found by running the containerised stack against the
+seeded demo menu, where exactly such a dish exists.
+
+Such dishes are now hidden from the WhatsApp menu rather than led up to, with a
+regression test. They stay fully orderable on the POS and the dashboard, which
+can ask the question. A restaurant whose menu is mostly single-price dishes is
+unaffected; one selling by size simply offers fewer dishes over WhatsApp until
+the sub-flow exists.
 
 **Needs:** a modifier sub-flow: required groups asked in order as button or list
 prompts, optional ones offered once, then the existing addItem call with the
@@ -190,20 +200,36 @@ the 24-hour window and why templates are the long pole, how to connect a number,
 what to check when nothing arrives, the limitations that stand at pilot, and a
 go-live checklist.
 
-### B-29. The production images are unbuilt
+### B-31. Services crash-loop after a host reboot
 
-**Phase:** deployment · **Status:** written, never run
+**Phase:** deployment · **Status:** self-healing, but ugly
 
-`infrastructure/docker/Dockerfile.node`, `Dockerfile.dashboard` and
-`docker-compose.prod.yml` were written on a machine without Docker. They are
-reviewed and structurally checked — every `depends_on` resolves, every variable
-is documented, and the Next standalone server was run directly to prove that
-half of the dashboard image — but **no image has been built**.
+`depends_on: condition: service_healthy` governs only the initial `up`. After a
+reboot, `restart: unless-stopped` brings every container back at once, so the
+API and worker can start before Postgres accepts connections, log "Can't reach
+database server" and exit. Docker restarts them and they recover within
+seconds, so nothing is lost — but the logs look like a broken deployment, and
+the first thing anybody will do is investigate it.
 
-Expect to fix something on the first `docker compose build`.
-[DEPLOYMENT.md](./DEPLOYMENT.md) lists the likely causes in order.
+Seen while verifying the stack under WSL.
 
-**Needs:** one build on a machine with Docker, then a deployment to a real host.
+**Needs:** the API and worker to retry their initial connection with backoff
+rather than exiting, which is a few lines in each bootstrap.
+
+### B-29. The production images — **closed**
+
+**Phase:** deployment · **Closed by:** the container verification pass
+
+Both images build, the stack comes up, migrations apply, the production
+database passwords take effect and the dev ones are rejected, and a WhatsApp
+order was placed end to end through the running containers. One real bug was
+found and fixed in the process: the dashboard build stage left NODE_ENV at
+development, so `next build` produced a broken bundle and failed prerendering
+/404 with "<Html> should not be imported outside of pages/_document" — a
+message that says nothing about NODE_ENV.
+
+Still unverified: Caddy and TLS, which need domains that resolve. See
+DEPLOYMENT.md for exactly what was and was not covered.
 
 ### B-30. No automated backups
 

@@ -5,11 +5,11 @@ dashboard and TLS termination. Enough for a pilot and for a good while after it:
 a restaurant taking a few hundred orders a day does not need more, and one box
 is something one person can hold in their head.
 
-> **These images have not been built yet.** They were written on a machine
-> without Docker, so the Dockerfiles and the compose file are reviewed and
-> structurally checked but **not proven to build**. Expect to fix something on
-> the first `docker compose build`. The parts most likely to bite are called out
-> below under *If the first build fails*.
+> **Verified.** Both images build, the stack comes up, migrations apply, the
+> least-privilege roles take their production passwords, and a WhatsApp order
+> was placed end to end through the running containers — signed webhook,
+> conversation, cart, checkout, kitchen display. See *What was actually
+> verified* below for exactly what was and was not covered.
 
 ---
 
@@ -136,7 +136,49 @@ a backup.
 
 ---
 
-## If the first build fails
+## What was actually verified
+
+On Docker 29 under WSL2, against the real images:
+
+- both images build from a clean context;
+- `migrate` applies all ten migrations and exits, before the API starts;
+- the API reports healthy, the dashboard serves, the worker passes both of its
+  least-privilege boot guards;
+- `restaurant_app` and `restaurant_worker` authenticate with the passwords from
+  `.env.production`, and **the development passwords committed in the init SQL
+  are rejected** — tested across the container network, because the official
+  Postgres image trusts `127.0.0.1` from inside the container and would accept
+  anything there;
+- `restaurant_app` is neither a superuser nor `BYPASSRLS`, and
+  `restaurant_worker` is refused `customers`;
+- an unsigned webhook is refused with 403, a signed one is accepted;
+- a customer orders over WhatsApp and the order appears on the kitchen display,
+  priced by the server.
+
+Not covered: Caddy and TLS (the domains do not resolve on a laptop), and
+multi-restart behaviour under a real reboot.
+
+## Building under WSL2
+
+Two things will bite, neither of them a fault in the images:
+
+**`npm ci` fails inside the build with `ECONNRESET`.** Docker under WSL has no
+working IPv6 egress, and the npm registry resolves to IPv6 first, so large
+downloads reset part-way. Build with host networking:
+
+```bash
+docker build --network=host -f infrastructure/docker/Dockerfile.node -t restaurant-os-node .
+```
+
+Compose's BuildKit does not inherit that flag, so either build the images first
+and let compose use them, or add `build: {network: host}` to a local override.
+
+**The containers appear to restart every few seconds.** WSL tears the distro
+down when nothing holds it open, and Docker restarts everything on the next
+command. `RestartCount` stays 0, which is the giveaway. Keep a process running
+(`wsl -- sleep 7200 &`) for the duration.
+
+## If the build fails elsewhere
 
 The likeliest causes, in order:
 
@@ -158,6 +200,14 @@ packages silently stop being included.
 **Caddy cannot get a certificate.** Both domains must already resolve to the
 machine and ports 80 and 443 must be open before it starts. Check
 `docker compose logs caddy`.
+
+**The worker crash-loops after a host reboot.** `depends_on` with
+`condition: service_healthy` governs only the initial `up`. On a reboot,
+`restart: unless-stopped` brings every container back at once, so the worker and
+API can start before Postgres is accepting connections, log "Can't reach
+database server" and exit. Docker restarts them and they recover within
+seconds, but the logs look alarming. Making the two processes wait for the
+database instead of exiting would be the proper fix.
 
 **The image is large (roughly 1GB).** Deliberate: the runtime stage keeps
 development dependencies because the Prisma CLI has to be present for
