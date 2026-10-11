@@ -261,6 +261,7 @@ export function notificationForOrderStatus(status: OrderStatus): NotificationSpe
 export function notificationSpecByTemplateKey(templateKey: string): NotificationSpec | null {
   if (templateKey === ESCALATION_NOTIFICATION.templateKey) return ESCALATION_NOTIFICATION;
   if (templateKey === HANDOFF_NOTIFICATION.templateKey) return HANDOFF_NOTIFICATION;
+  if (templateKey === KDS_OFFLINE_NOTIFICATION.templateKey) return KDS_OFFLINE_NOTIFICATION;
   return (
     Object.values(ORDER_NOTIFICATIONS).find((spec) => spec.templateKey === templateKey) ?? null
   );
@@ -303,6 +304,33 @@ export const HANDOFF_NOTIFICATION: NotificationSpec = {
   notifyStaff: true,
 };
 
+/**
+ * How long a branch may go without a live kitchen screen before the alarm is
+ * raised (backlog B-17).
+ *
+ * Two minutes: eight heartbeats. Long enough that a tablet changing wifi
+ * access point, or a browser tab being reloaded, does not wake anybody; short
+ * enough that an order is not sitting unseen for the length of a delivery.
+ */
+export const KDS_OFFLINE_SECONDS = 120;
+
+/**
+ * The kitchen screen alarm (ENGINEERING_SPEC.md 70).
+ *
+ * Staff only, every channel at once, and for the same reason the escalation
+ * alarm is: the dashboard being unwatched is a plausible part of the very
+ * situation that raised this. If the screen is off because everyone has gone
+ * home, a dashboard notification is talking to an empty room.
+ */
+export const KDS_OFFLINE_NOTIFICATION: NotificationSpec = {
+  templateKey: 'kitchen_screen_offline',
+  category: WhatsAppTemplateCategory.UTILITY,
+  channels: [NotificationChannel.DASHBOARD, NotificationChannel.WHATSAPP, NotificationChannel.SMS],
+  deliveryMode: 'all-channels',
+  notifyCustomer: false,
+  notifyStaff: true,
+};
+
 export const ESCALATION_NOTIFICATION: NotificationSpec = {
   templateKey: 'order_unacknowledged',
   category: WhatsAppTemplateCategory.UTILITY,
@@ -318,6 +346,8 @@ export const ESCALATION_NOTIFICATION: NotificationSpec = {
 // ---------------------------------------------------------------------------
 
 export interface MessageVariables {
+  /** How many orders are waiting, for the kitchen screen alarm. */
+  waitingOrders?: number | null;
   customerName?: string | null;
   /** The customer's number, for a message to staff about a conversation. */
   contact?: string | null;
@@ -371,6 +401,14 @@ export function renderMessageBody(templateKey: string, variables: MessageVariabl
         `${variables.branchName ?? restaurant} and is still waiting. ` +
         `Please open Conversations in the dashboard.`
       );
+    case 'kitchen_screen_offline':
+      // Says the number, because "the screen is offline" and "the screen is
+      // offline and four orders are waiting" call for different reactions.
+      return (
+        `The kitchen screen at ${variables.branchName ?? restaurant} is not ` +
+        `connected, and ${variables.waitingOrders ?? 'some'} order(s) are waiting. ` +
+        `Please check the screen or work from the orders list.`
+      );
     default:
       return `Update on order ${order} from ${restaurant}.`;
   }
@@ -395,6 +433,11 @@ export function templateVariables(
       ];
     case 'order_unacknowledged':
       return [variables.orderNumber, variables.branchName ?? variables.restaurantName];
+    case 'kitchen_screen_offline':
+      return [
+        variables.branchName ?? variables.restaurantName,
+        String(variables.waitingOrders ?? ''),
+      ];
     case 'order_cancelled':
     case 'order_rejected':
       return [

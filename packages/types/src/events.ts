@@ -48,6 +48,17 @@ export const DomainEventType = {
    * have the inbox open.
    */
   CONVERSATION_HANDOFF_UNANSWERED: 'ConversationHandoffUnanswered',
+
+  /**
+   * A branch has orders in the kitchen and no live kitchen screen (spec 70;
+   * backlog B-17).
+   *
+   * The third sibling of the two above, and the one with the quietest failure:
+   * an unacknowledged order and an unanswered customer are at least visible to
+   * anybody looking at the dashboard, whereas a kitchen whose screen dropped
+   * off shows nothing at all — to the kitchen, there are simply no orders.
+   */
+  KITCHEN_SCREEN_OFFLINE: 'KitchenScreenOffline',
 } as const;
 
 export type DomainEventType = (typeof DomainEventType)[keyof typeof DomainEventType];
@@ -61,6 +72,7 @@ export const AggregateType = {
   CART: 'Cart',
   CUSTOMER: 'Customer',
   CONVERSATION: 'Conversation',
+  BRANCH: 'Branch',
 } as const;
 
 export type AggregateType = (typeof AggregateType)[keyof typeof AggregateType];

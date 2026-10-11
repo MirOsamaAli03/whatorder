@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { OrderStatus, PaymentMethod, SystemRole } from '@restaurant-os/types';
+import { DomainEventType, OrderStatus, PaymentMethod, SystemRole } from '@restaurant-os/types';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -425,6 +425,167 @@ describe('kds and realtime', () => {
       expect(claims.tenantId).toBe(tenant.organizationId);
 
       await expect(service.redeem(ticket)).rejects.toThrow(/invalid, expired, or already used/);
+    });
+  });
+
+  describe('a kitchen screen that drops off (spec 70)', () => {
+    const noop = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never;
+
+    /**
+     * A branch of its own, with no orders on it by construction.
+     *
+     * The other two branches collect orders as the rest of this file runs, and
+     * "no orders waiting" is precisely what one of these tests is about.
+     */
+    let quietBranchId: string;
+
+    beforeAll(async () => {
+      const branch = await context.admin.branch.create({
+        data: { tenantId: tenant.organizationId, name: 'quiet', slug: `quiet-${randomUUID().slice(0, 8)}` },
+      });
+      quietBranchId = branch.id;
+    });
+
+    async function monitor() {
+      const { EscalationMonitor } = await import('../../worker/src/escalation-monitor');
+      return new EscalationMonitor(worker, noop, { pollMs: 1000 });
+    }
+
+    /** As a screen that heartbeated `secondsAgo` and has not since. */
+    async function presence(secondsAgo: number, targetBranch = secondBranchId) {
+      const at = new Date(Date.now() - secondsAgo * 1000);
+      await context.admin.kdsPresence.upsert({
+        where: { branchId: targetBranch },
+        create: {
+          tenantId: tenant.organizationId,
+          branchId: targetBranch,
+          lastSeenAt: at,
+          lastConnectedAt: at,
+        },
+        update: { lastSeenAt: at, lastConnectedAt: at, offlineAlertedAt: null },
+      });
+    }
+
+    function offlineEvents(targetBranch = secondBranchId) {
+      return context.admin.outboxEvent.count({
+        where: { eventType: DomainEventType.KITCHEN_SCREEN_OFFLINE, aggregateId: targetBranch },
+      });
+    }
+
+    /**
+     * The presence write is deliberately not awaited by the stream — a kitchen
+     * screen does not wait on a monitoring write — so this polls rather than
+     * assuming it has landed.
+     */
+    async function presenceRow(targetBranch: string, timeoutMs = 2_000) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const row = await context.admin.kdsPresence.findUnique({ where: { branchId: targetBranch } });
+        if (row || Date.now() > deadline) return row;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+
+    it('records a heartbeat as presence', async () => {
+      // Through the real stream, so what is asserted is that the endpoint the
+      // kitchen actually opens writes the record — not that a service can.
+      const ticket = await post(`/api/v1/kds/branches/${branchId}/ticket`, {});
+      expect(ticket.statusCode).toBe(200);
+
+      const stream = await context.app.inject({
+        method: 'GET',
+        url: `/api/v1/kds/stream?ticket=${ticket.json().data.ticket}`,
+        payloadAsStream: true,
+      });
+      expect(stream.statusCode).toBe(200);
+      stream.raw.res.destroy();
+
+      const row = await presenceRow(branchId);
+      expect(row, 'opening the stream should record presence').not.toBeNull();
+      expect(row!.lastSeenAt.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    });
+
+    it('says nothing about a dark screen with no orders waiting', async () => {
+      // A closed restaurant has no screen on at three in the morning and does
+      // not want to hear about it. An alarm that cries every night is one
+      // nobody reads by the end of the week.
+      await presence(600, quietBranchId);
+      const before = await offlineEvents(quietBranchId);
+
+      await (await monitor()).sweepOnce();
+
+      expect(await offlineEvents(quietBranchId)).toBe(before);
+      // And deliberately not marked, so the first order to arrive while the
+      // screen is still off does raise it.
+      const row = await presenceRow(quietBranchId);
+      expect(row!.offlineAlertedAt).toBeNull();
+    });
+
+    it('raises the alarm once when orders are waiting', async () => {
+      const order = await placeOrder(secondBranchId);
+      expect(order.status).toBe(OrderStatus.CONFIRMED);
+
+      await presence(600);
+      const before = await offlineEvents();
+
+      await (await monitor()).sweepOnce();
+      expect(await offlineEvents()).toBe(before + 1);
+
+      // A five-second sweep must not alert twelve times a minute.
+      await (await monitor()).sweepOnce();
+      expect(await offlineEvents()).toBe(before + 1);
+
+      const row = await context.admin.kdsPresence.findUnique({ where: { branchId: secondBranchId } });
+      expect(row!.offlineAlertedAt).not.toBeNull();
+    });
+
+    it('counts the orders waiting, for the message', async () => {
+      await presence(600);
+      await (await monitor()).sweepOnce();
+
+      const event = await context.admin.outboxEvent.findFirst({
+        where: { eventType: DomainEventType.KITCHEN_SCREEN_OFFLINE, aggregateId: secondBranchId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const payload = event!.payload as Record<string, unknown>;
+      // "The screen is offline" and "the screen is offline and four orders are
+      // waiting" call for different reactions.
+      expect(payload.waitingOrders).toBeGreaterThan(0);
+      expect(payload.offlineSeconds).toBeGreaterThan(0);
+    });
+
+    it('re-arms itself when a screen comes back', async () => {
+      await presence(600);
+      await (await monitor()).sweepOnce();
+      const afterFirst = await offlineEvents();
+
+      // A heartbeat is the only "back online" signal there is, which is why
+      // clearing the flag lives in the same write.
+      await presence(0);
+      const cleared = await context.admin.kdsPresence.findUnique({
+        where: { branchId: secondBranchId },
+      });
+      expect(cleared!.offlineAlertedAt).toBeNull();
+
+      // Still fresh, so nothing yet.
+      await (await monitor()).sweepOnce();
+      expect(await offlineEvents()).toBe(afterFirst);
+
+      // Gone again: a second outage is a second alarm.
+      await presence(600);
+      await (await monitor()).sweepOnce();
+      expect(await offlineEvents()).toBe(afterFirst + 1);
+    });
+
+    it('leaves a screen that is merely slow alone', async () => {
+      // One missed heartbeat is a tablet changing access point, not an outage.
+      await presence(20);
+      const before = await offlineEvents();
+
+      await (await monitor()).sweepOnce();
+
+      expect(await offlineEvents()).toBe(before);
     });
   });
 

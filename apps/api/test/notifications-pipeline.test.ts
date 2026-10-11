@@ -321,6 +321,94 @@ describe('notification pipeline', () => {
       ).toBe(true);
     });
 
+    it('alerts staff when a kitchen screen is dark with orders waiting', async () => {
+      const order = await placeOrder();
+      await context.admin.user.update({
+        where: { id: tenant.users.owner!.userId },
+        data: { phone: '+923005554444' },
+      });
+
+      // As the worker's sweep leaves it: the alarm raised and recorded.
+      await context.admin.kdsPresence.upsert({
+        where: { branchId },
+        create: {
+          tenantId: tenant.organizationId,
+          branchId,
+          lastSeenAt: new Date(Date.now() - 600_000),
+          lastConnectedAt: new Date(Date.now() - 600_000),
+          offlineAlertedAt: new Date(),
+        },
+        update: { offlineAlertedAt: new Date() },
+      });
+
+      await context.admin.outboxEvent.create({
+        data: {
+          id: randomUUID(),
+          tenantId: tenant.organizationId,
+          eventType: 'KitchenScreenOffline',
+          aggregateType: 'Branch',
+          aggregateId: branchId,
+          actor: 'SYSTEM',
+          payload: { branchId, waitingOrders: 1, offlineSeconds: 600 },
+        },
+      });
+
+      await dispatcher.dispatchOnce();
+
+      const staff = await notifications({
+        recipientType: RecipientType.STAFF,
+        templateKey: 'kitchen_screen_offline',
+      });
+
+      // Every channel, for the same reason the escalation alarm uses them all:
+      // if the screen is dark because everyone went home, a dashboard
+      // notification is talking to an empty room.
+      expect(staff.map((row) => row.channel).sort()).toEqual([
+        NotificationChannel.DASHBOARD,
+        NotificationChannel.SMS,
+        NotificationChannel.WHATSAPP,
+      ]);
+      expect(staff.every((row) => row.recipientType === RecipientType.STAFF)).toBe(true);
+      // The count comes from the message, so staff know what they are walking into.
+      const variables = (staff[0]!.payload as { variables?: { waitingOrders?: number } }).variables;
+      expect(variables?.waitingOrders).toBeGreaterThan(0);
+      expect(order.id).toBeTruthy();
+    });
+
+    it('says nothing once a screen has come back', async () => {
+      // A heartbeat clears offlineAlertedAt. Waking somebody about a problem
+      // that fixed itself between the sweep and the dispatch is how an alarm
+      // earns the right to be ignored.
+      await placeOrder();
+      await context.admin.kdsPresence.upsert({
+        where: { branchId },
+        create: {
+          tenantId: tenant.organizationId,
+          branchId,
+          lastSeenAt: new Date(),
+          lastConnectedAt: new Date(),
+        },
+        update: { lastSeenAt: new Date(), offlineAlertedAt: null },
+      });
+
+      const eventId = randomUUID();
+      await context.admin.outboxEvent.create({
+        data: {
+          id: eventId,
+          tenantId: tenant.organizationId,
+          eventType: 'KitchenScreenOffline',
+          aggregateType: 'Branch',
+          aggregateId: branchId,
+          actor: 'SYSTEM',
+          payload: { branchId, waitingOrders: 1, offlineSeconds: 600 },
+        },
+      });
+
+      await dispatcher.dispatchOnce();
+
+      expect(await context.admin.notification.count({ where: { eventId } })).toBe(0);
+    });
+
     it('respects a channel the tenant has switched off', async () => {
       await context.app.inject({
         method: 'PUT',
