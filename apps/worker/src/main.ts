@@ -1,6 +1,7 @@
 import {
   assertLeastPrivilegeConnection,
   assertWorkerConnection,
+  connectWithRetry,
   createPrismaClient,
   createWorkerPrismaClient,
 } from '@restaurant-os/database';
@@ -46,7 +47,14 @@ async function bootstrap(): Promise<void> {
   });
 
   const prisma = createWorkerPrismaClient(config.databaseUrl);
-  await prisma.$connect();
+
+  // Same reasoning as the API: after a reboot the database may still be
+  // starting, and exiting turns a few seconds of waiting into a crash loop
+  // that reads as a broken deployment (backlog B-31).
+  await connectWithRetry(prisma, {
+    onRetry: (attempt, _error, waitMs) =>
+      logger.warn({ attempt, waitMs }, 'Database not ready; retrying'),
+  });
 
   // Refuses to start if the worker role has more access than the design
   // intends — see packages/database/src/worker.ts.
@@ -59,7 +67,10 @@ async function bootstrap(): Promise<void> {
   // guard the API uses refuses to start if this turns out to be the owner role
   // by mistake.
   const appPrisma = createPrismaClient({ databaseUrl: config.appDatabaseUrl });
-  await appPrisma.$connect();
+  await connectWithRetry(appPrisma, {
+    onRetry: (attempt, _error, waitMs) =>
+      logger.warn({ attempt, waitMs }, 'Database not ready; retrying'),
+  });
   await assertLeastPrivilegeConnection(appPrisma);
   logger.info('Application database connection verified as least-privilege');
 

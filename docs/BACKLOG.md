@@ -200,21 +200,19 @@ the 24-hour window and why templates are the long pole, how to connect a number,
 what to check when nothing arrives, the limitations that stand at pilot, and a
 go-live checklist.
 
-### B-31. Services crash-loop after a host reboot
+### B-31. Services crash-loop after a host reboot — **closed**
 
-**Phase:** deployment · **Status:** self-healing, but ugly
+**Phase:** deployment · **Closed by:** `connectWithRetry`
 
-`depends_on: condition: service_healthy` governs only the initial `up`. After a
-reboot, `restart: unless-stopped` brings every container back at once, so the
-API and worker can start before Postgres accepts connections, log "Can't reach
-database server" and exit. Docker restarts them and they recover within
-seconds, so nothing is lost — but the logs look like a broken deployment, and
-the first thing anybody will do is investigate it.
+Both processes now wait for the database instead of exiting: exponential
+backoff from 500ms, capped at 5s, bounded at 30 attempts so a genuinely
+misconfigured connection string still fails loudly rather than hanging.
 
-Seen while verifying the stack under WSL.
-
-**Needs:** the API and worker to retry their initial connection with backoff
-rather than exiting, which is a few lines in each bootstrap.
+Verified against the real failure rather than simulated — Postgres stopped, the
+API and worker restarted against a dead database, then Postgres brought back.
+Both stayed up, logged "Database not ready; retrying" with the attempt and the
+wait, recovered in place with `RestartCount=0`, and the full WhatsApp order
+end-to-end passed afterwards.
 
 ### B-29. The production images — **closed**
 

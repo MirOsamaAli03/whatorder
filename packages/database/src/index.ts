@@ -8,6 +8,8 @@ export {
 
 export { assertWorkerConnection, createWorkerPrismaClient } from './worker';
 
+export { connectWithRetry, type ConnectWithRetryOptions } from './connect';
+
 export {
   assertLeastPrivilegeConnection,
   describeConnection,
