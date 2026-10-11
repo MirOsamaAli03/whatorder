@@ -46,6 +46,18 @@ are covered, and menu structure changes rarely.
 
 ---
 
+## Open — deployment
+
+### B-30. No automated backups
+
+**Phase:** deployment · **Status:** documented, not automated
+
+The database is the only thing that cannot be rebuilt from the repository.
+DEPLOYMENT.md gives the `pg_dump` line; nothing runs it, and nothing copies it
+off the machine. This is the gap that would hurt most on the day it matters.
+
+---
+
 ## Open — new in Phase 6 (WhatsApp ordering)
 
 ### B-25. A multi-branch tenant on one number picks the first branch
@@ -121,34 +133,6 @@ credentials.
 adapter implementing `NotificationChannelAdapter`, and its credentials per
 tenant — following `whatsapp_accounts`, since an SMS sender id is per business
 too. Email needs the same shape plus a template renderer.
-
-### B-21. No notification settings screen
-
-**Phase:** 5 · **Status:** API complete, UI absent
-
-Preferences, WhatsApp numbers, templates and their approval status are all
-readable and writable through the API, and the approval status is the thing a
-restaurant most needs to see — a `REJECTED` template is why their customers
-stopped hearing from them. There is no screen for any of it, so connecting a
-number is an engineer's job.
-
-Same call as B-1 and B-19: the settings screens are grouped and will land
-together.
-
-### B-22. Number migration is unaddressed (plan §2.2)
-
-**Phase:** 5 · **Status:** known onboarding blocker
-
-A Kababjees-class target already uses its WhatsApp number in the WhatsApp
-Business *app*, and a number cannot be in both the app and the API at once.
-Onboarding has to include a guided migration, and the restaurant loses its
-existing chat history and app workflow. The plan predicted this would be the
-single biggest onboarding objection and it is unaddressed: there is no guidance,
-no checklist and no support doc.
-
-**Needs:** an onboarding flow with the migration steps, a support document, and
-a dashboard state for "number not yet migrated" so it is visible rather than
-presenting as silence.
 
 ### B-23. Retry classification is coarse for real providers
 
@@ -228,14 +212,6 @@ message that says nothing about NODE_ENV.
 
 Still unverified: Caddy and TLS, which need domains that resolve. See
 DEPLOYMENT.md for exactly what was and was not covered.
-
-### B-30. No automated backups
-
-**Phase:** deployment · **Status:** documented, not automated
-
-The database is the only thing that cannot be rebuilt from the repository.
-DEPLOYMENT.md gives the `pg_dump` line; nothing runs it, and nothing copies it
-off the machine. This is the gap that would hurt most on the day it matters.
 
 ### B-28. An unanswered handoff does not reach a phone — **closed**
 
