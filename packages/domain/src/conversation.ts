@@ -624,6 +624,22 @@ export function itemUnavailableMessage(name: string): string {
   return `Sorry, ${name} is not available right now. Please pick something else.`;
 }
 
+/**
+ * The reply to a number the restaurant has blocked.
+ *
+ * Deliberately not an explanation. A customer blocked for abuse or repeated
+ * fraud does not need to be told which, and a bot that argues the case is worse
+ * than one that points at a human. It also must not read as a fault — "we
+ * cannot take orders from this number" is a decision somebody made, and saying
+ * so plainly is more respectful than pretending something broke.
+ */
+export function blockedCustomerMessage(restaurantName: string): string {
+  return (
+    `Sorry, we cannot take orders from this number. ` +
+    `Please contact ${restaurantName} directly if you think this is a mistake.`
+  );
+}
+
 export function noSearchResultsMessage(query: string): string {
   return `I could not find anything matching "${query}". Tap Browse menu to see everything we have.`;
 }

@@ -172,6 +172,31 @@ describe('orders', () => {
       expect(line.modifiers[0].optionName).toBe('Chilli');
     });
 
+    it('refuses to attach a blocked customer to an existing cart', async () => {
+      // `create` already refused one. Attaching afterwards was the way round
+      // it, and the refusal then arrived at checkout instead — the last step,
+      // after an address had been typed (backlog B-14).
+      const blocked = await context.admin.customer.create({
+        data: {
+          tenantId: tenant.organizationId,
+          phone: `+9230055${randomUUID().slice(0, 5)}`,
+          isBlocked: true,
+        },
+        select: { id: true },
+      });
+
+      const cartId = await seedCart({});
+      const attached = await context.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/carts/${cartId}`,
+        headers: authHeaders(ownerToken),
+        payload: { customerId: blocked.id },
+      });
+
+      expect(attached.statusCode).toBe(403);
+      expect(attached.json().error.message).toContain('blocked');
+    });
+
     it('refuses an option that belongs to another item', async () => {
       const otherModifier = await post('/api/v1/menu/modifiers', {
         name: `Unrelated ${randomUUID().slice(0, 6)}`,

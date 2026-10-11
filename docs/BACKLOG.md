@@ -148,6 +148,52 @@ against a real provider's documentation.
 
 ## Closed in the pilot-readiness pass
 
+### B-13, B-18. Nothing deleted expired carts, keys, notifications or events — **closed**
+
+**Phase:** 3, 4 · **Closed by:** the retention sweeper
+
+Four tables grew without bound: abandoned carts, expired idempotency keys,
+finished notifications and consumed outbox events. The worker now prunes all
+four hourly. Carts and keys get a day's grace past their own expiry; the two
+logs are kept a month and a fortnight, because their value is answering "what
+did we send that customer last Tuesday".
+
+What is safe to delete is decided in the database, in a SECURITY DEFINER
+function, for two reasons. DELETE needs SELECT on the columns in its WHERE
+clause, so doing it with a column grant would have handed a background process
+standing read access to carts and to notifications — the worker can now prune
+them and still cannot read either, which a test asserts. And the outbox prune
+has to compare against the slowest consumer's cursor, which has to happen in
+one statement: reading the cursor and then deleting leaves a window where the
+dispatcher advances and an event it never handled is deleted underneath it.
+
+Nothing live is touched: a cart with no expiry, one expiring in an hour, one
+that expired a minute ago, a CHECKED_OUT cart, an unexpired key, a PENDING
+notification however old, and any outbox event above a consumer's cursor all
+survive, each with a test.
+
+One bug caught in the writing, which is the reason for the test that asserts a
+cart expiring in an hour survives. Every timestamp column here is `timestamp
+without time zone` holding UTC, because that is what Prisma writes. `now()` is
+a timestamptz, and comparing the two makes PostgreSQL localise it to the
+session's TimeZone — so on a server set to Asia/Karachi, which is the
+deployment target, "older than an hour ago" meant "older than four hours from
+now", and the first version deleted live carts and unexpired idempotency keys.
+
+### B-14. Blocked customers could still build a cart — **closed**
+
+**Phase:** 3 · **Closed by:** the retention and polish pass
+
+Two holes, both now shut. `POST /carts` refused a blocked customer but `PATCH
+/carts/:id` did not, so attaching one afterwards was the way round the check —
+and the refusal then arrived at checkout, the last step, after an address had
+been typed.
+
+Over WhatsApp it was worse: the number could browse the menu, build an order
+and choose a delivery address before being refused, and the refusal was a 403
+the conversation could only report as "something went wrong on our side". The
+bot now says so at the first message, plainly and without arguing the case.
+
 ### B-24. Inbox for handed-off conversations — **closed**
 
 **Phase:** 6 · **Closed by:** the pilot-readiness pass
@@ -270,14 +316,6 @@ client can detect staleness, but the API keeps no registry of connected screens,
 so nothing server-side notices when a kitchen's display drops off. Needs a
 presence record keyed by branch, updated on connect and heartbeat.
 
-### B-18. Outbox retention
-
-**Phase:** 4 · **Status:** minor, but unbounded
-
-Processed outbox rows are never deleted. They are a useful event log, but the
-table grows forever. Needs a retention policy and a prune job — the same sweeper
-that B-13 needs for carts and idempotency keys.
-
 ---
 
 ## A note on the UI backlog
@@ -318,25 +356,6 @@ subtotal, and `orders.discount_amount` stores the result. Nothing produces a
 non-zero value: promotions and coupons are Phase 12. The path is tested with
 explicit discounts so that when promotions arrive they have somewhere correct to
 plug into.
-
-### B-13. No sweeper for expired carts or idempotency keys
-
-**Phase:** 3 · **Status:** waiting on Phase 4
-
-`carts.expires_at` and `idempotency_keys.expires_at` are both set and both
-indexed; nothing prunes either. Phase 5 added a third candidate: finished
-`notifications` rows. Expired idempotency keys are handled correctly
-on read — an expired key is treated as absent — so this is housekeeping rather
-than a correctness problem. Needs the Phase 4 worker.
-
-### B-14. Blocked customers can still build a cart
-
-**Phase:** 3 · **Status:** minor
-
-`customers.is_blocked` is enforced at checkout and when attaching a customer to
-a cart, but a cart created without a customer and only associated at checkout
-lets a blocked customer get all the way to the last step before being refused.
-Harmless, but poor service.
 
 ---
 

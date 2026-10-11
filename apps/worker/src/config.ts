@@ -38,6 +38,8 @@ export interface WorkerConfig {
    * short enough that a worker killed mid-send does not strand it.
    */
   notificationStaleClaimMs: number;
+  /** How often to delete expired rows, in milliseconds. */
+  retentionPollMs: number;
 }
 
 function loadEnvFile(): void {
@@ -95,5 +97,8 @@ export function loadWorkerConfig(): WorkerConfig {
     notificationSendPollMs: Number(process.env.WORKER_NOTIFICATION_SEND_POLL_MS ?? 1_000),
     notificationBatchSize: Number(process.env.WORKER_NOTIFICATION_BATCH_SIZE ?? 25),
     notificationStaleClaimMs: Number(process.env.WORKER_NOTIFICATION_STALE_CLAIM_MS ?? 120_000),
+    // Hourly. Nothing here is urgent, and a prune competing with order traffic
+    // for the same tables is worse than a table that is an hour too long.
+    retentionPollMs: Number(process.env.WORKER_RETENTION_POLL_MS ?? 3_600_000),
   };
 }
