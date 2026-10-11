@@ -48,13 +48,29 @@ are covered, and menu structure changes rarely.
 
 ## Open — deployment
 
-### B-30. No automated backups
+### B-30. No automated backups — **closed**
 
-**Phase:** deployment · **Status:** documented, not automated
+**Phase:** deployment · **Closed by:** the `backup` sidecar
 
-The database is the only thing that cannot be rebuilt from the repository.
-DEPLOYMENT.md gives the `pg_dump` line; nothing runs it, and nothing copies it
-off the machine. This is the gap that would hurt most on the day it matters.
+A gzipped `pg_dump` once on start and then daily, keeping seven days. A sidecar
+in the compose file rather than a cron job on the host, so backups travel with
+the stack: anybody who runs it gets them without having to read the
+documentation and remember.
+
+Written to a `.partial` name and renamed only once `pg_dump` succeeds and the
+file is confirmed to carry PostgreSQL's completion marker, so a dump cut off
+half way cannot sit there looking like a good one. Verified by pointing it at a
+database that does not exist: it failed, and left nothing behind.
+
+The restore was tested rather than assumed — a backup of a live database
+holding a real WhatsApp order restored into a scratch database with zero SQL
+errors, identical row counts, the order readable, and all 38 Row-Level Security
+policies intact.
+
+**One half remains, deliberately.** The backups sit on the same machine as the
+database, which covers a bad migration or a wrong `DELETE` but not losing the
+machine. Copying them off needs a credential this repository should not hold,
+so DEPLOYMENT.md gives the cron line instead.
 
 ---
 

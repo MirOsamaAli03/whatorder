@@ -123,16 +123,68 @@ loads and then cannot reach the API, with no server-side error to explain it.
 
 ## Backups
 
-Not automated. The database is the only thing that cannot be rebuilt from the
-repository, so this is the gap that would hurt most:
+Automated. The `backup` service takes a gzipped `pg_dump` once on start and
+then daily, into the `backups` volume, keeping seven days.
 
 ```bash
-docker compose -f infrastructure/docker/docker-compose.prod.yml exec -T postgres \
-  pg_dump -U restaurant_owner restaurant_os | gzip > "backup-$(date +%F).sql.gz"
+# What is there
+docker compose -f infrastructure/docker/docker-compose.prod.yml   exec backup ls -lh /backups
+
+# Take one right now, before a risky change
+docker compose -f infrastructure/docker/docker-compose.prod.yml   exec backup sh /usr/local/bin/backup.sh
 ```
 
-Put that on a cron and copy it off the machine. A backup on the same disk is not
-a backup.
+Tune with `BACKUP_KEEP_DAYS` and `BACKUP_INTERVAL_SECONDS` in
+`.env.production`.
+
+A dump is written under a `.partial` name and renamed only after `pg_dump`
+succeeds *and* the file is confirmed to end with PostgreSQL's completion
+marker. A backup interrupted half way would otherwise sit in the directory
+looking exactly like a good one, and be found to be truncated on the day it is
+needed. Pruning only ever deletes files this script wrote, and only when at
+least one recent backup survives — a retention policy that can empty the
+directory is a deletion policy.
+
+### Restoring
+
+Into a scratch database first, always. Never straight over the live one.
+
+```bash
+COMPOSE="docker compose -f infrastructure/docker/docker-compose.prod.yml"
+
+$COMPOSE exec postgres psql -U restaurant_owner -d postgres   -c "CREATE DATABASE restore_check"
+
+$COMPOSE exec backup sh -c "gzip -dc /backups/restaurant_os-<timestamp>.sql.gz"   | $COMPOSE exec -T postgres psql -U restaurant_owner -d restore_check
+```
+
+Then check it: row counts against the live database, and that Row-Level
+Security came back with it —
+
+```sql
+select count(*) from pg_tables where schemaname='public' and rowsecurity;
+```
+
+should be 38. A database restored without its RLS policies would leave tenant
+isolation resting on application code alone, which is exactly the single point
+of failure the second layer exists to remove.
+
+This round trip has been tested against the running stack: a backup of a live
+database holding a real WhatsApp order restored with zero SQL errors, identical
+row counts, the order readable, and all 38 policies intact.
+
+### The half this does not do
+
+**The backups sit on the same machine as the database.** That covers a bad
+migration, a wrong `DELETE`, a corrupted table — not losing the machine.
+Copying them elsewhere needs a credential this repository should not hold, so
+it stays a deployment step:
+
+```bash
+# Nightly, from the host — object storage, another server, anywhere but here
+0 4 * * * docker cp restaurant-os-backup-1:/backups /srv/backup-staging             && rclone sync /srv/backup-staging remote:whatorder
+```
+
+A backup on the same disk is most of a backup. It is not all of one.
 
 ---
 
