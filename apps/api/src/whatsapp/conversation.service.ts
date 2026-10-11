@@ -752,11 +752,36 @@ export class ConversationService {
   }
 
   /** Visible to a customer and not sold out. */
-  private orderable(item: { isVisible?: boolean; availability: string }): boolean {
+  /**
+   * Visible, in stock, and completable in a conversation.
+   *
+   * The last of those is the subtle one. The flow adds an item at its base
+   * price with no options (backlog B-26), so a dish with a REQUIRED modifier
+   * group — "choose a portion" — cannot be ordered this way. Without this
+   * check the customer taps it, chooses a quantity, picks an order type, gives
+   * an address, taps Place order, and only then does checkout refuse it with
+   * "choose at least 1 option", which the conversation can only report as
+   * "something went wrong on our side".
+   *
+   * Leading somebody through six steps to a dead end is worse than not
+   * offering the dish, so it is hidden from the WhatsApp menu until the
+   * modifier sub-flow exists. It stays fully orderable on the POS and the
+   * dashboard, which can ask the question.
+   */
+  private orderable(item: {
+    isVisible?: boolean;
+    availability: string;
+    modifiers?: Array<{ required: boolean; minSelections: number }>;
+  }): boolean {
+    const needsAChoice = (item.modifiers ?? []).some(
+      (modifier) => modifier.required || modifier.minSelections > 0,
+    );
+
     return (
       (item.isVisible ?? true) &&
       item.availability !== MenuItemAvailability.OUT_OF_STOCK &&
-      item.availability !== MenuItemAvailability.HIDDEN
+      item.availability !== MenuItemAvailability.HIDDEN &&
+      !needsAChoice
     );
   }
 

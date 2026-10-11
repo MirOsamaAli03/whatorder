@@ -14,6 +14,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # ---------------------------------------------------------------------------
 FROM base AS build
 
+# Dev dependencies are needed to compile, and `npm ci` omits them when NODE_ENV
+# is production. Switched back before the build runs — see below.
 ENV NODE_ENV=development
 
 COPY package.json package-lock.json turbo.json tsconfig.base.json ./
@@ -41,6 +43,15 @@ COPY apps/dashboard ./apps/dashboard
 # explain it.
 ARG NEXT_PUBLIC_API_URL=http://127.0.0.1:3001
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+# Back to production for the build itself.
+#
+# `next build` under NODE_ENV=development produces a broken production bundle:
+# it warns about a non-standard NODE_ENV and then fails prerendering /404 with
+# "<Html> should not be imported outside of pages/_document", because the
+# error-page fallback resolves to the pages-router component. The message says
+# nothing about NODE_ENV, which is what makes it worth a comment.
+ENV NODE_ENV=production
 
 RUN npx turbo run build --filter=@restaurant-os/dashboard
 
