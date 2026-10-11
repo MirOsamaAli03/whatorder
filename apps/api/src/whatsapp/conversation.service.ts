@@ -949,6 +949,15 @@ export class ConversationService {
           branchId: turn.branchId,
           expiresAt: new Date(Date.now() + CONVERSATION_TTL_MS),
           lastInboundAt: new Date(),
+
+          // Entering a handoff starts a fresh clock.
+          //
+          // This line is only ever reached when the session was NOT already in
+          // a handoff — the bot returns early and stays silent once it is — so
+          // reaching HUMAN_HANDOFF here means a new one. Without the reset, a
+          // customer whose previous handoff was escalated would never raise
+          // the alarm again (backlog B-28).
+          ...(state === ConversationState.HUMAN_HANDOFF ? { handoffEscalatedAt: null } : {}),
         },
       }),
     );

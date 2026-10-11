@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from '@restaurant-os/database';
 import {
   DEFAULT_ESCALATION_LADDER,
+  DEFAULT_HANDOFF_RESPONSE_SECONDS,
   normalizeEscalationLadder,
   dueEscalations,
   type EscalationRung,
@@ -95,8 +96,10 @@ export class EscalationMonitor {
     });
 
     const ladderByTenant = new Map<string, EscalationRung[]>();
+    const settingsByTenant = new Map<string, unknown>();
     for (const organization of organizations) {
       ladderByTenant.set(organization.id, this.ladderFor(organization.settings, organization.id));
+      settingsByTenant.set(organization.id, organization.settings);
     }
 
     const waiting = await this.prisma.order.findMany({
@@ -143,8 +146,95 @@ export class EscalationMonitor {
     }
 
     await this.resolveAcknowledged();
+    raised += await this.sweepUnansweredHandoffs(now, settingsByTenant);
 
     return raised;
+  }
+
+  /**
+   * Raises the alarm when a customer asked for a person and nobody replied
+   * (backlog B-28).
+   *
+   * The conversational sibling of the unacknowledged-order sweep, and it exists
+   * for the same reason: the bot promises "somebody will reply here shortly",
+   * and until this ran that promise depended on a member of staff happening to
+   * have the inbox open during service.
+   *
+   * The worker can see which conversation, where, and since when — and is
+   * refused the customer's number and their cart at the database (migration
+   * 20260901001000). Composing the message is left to the dispatcher, on a
+   * connection that is allowed to know who the customer is.
+   */
+  private async sweepUnansweredHandoffs(
+    now: Date,
+    settingsByTenant: Map<string, unknown>,
+  ): Promise<number> {
+    const waiting = await this.prisma.conversationSession.findMany({
+      where: {
+        state: 'HUMAN_HANDOFF',
+        handoffEscalatedAt: null,
+        lastInboundAt: { not: null },
+      },
+      select: { id: true, tenantId: true, branchId: true, lastInboundAt: true },
+      orderBy: { lastInboundAt: 'asc' },
+      take: 200,
+    });
+
+    let raised = 0;
+
+    for (const conversation of waiting) {
+      const threshold = this.handoffThresholdFor(settingsByTenant.get(conversation.tenantId));
+      const waitedSeconds = Math.floor(
+        (now.getTime() - conversation.lastInboundAt!.getTime()) / 1000,
+      );
+
+      if (waitedSeconds < threshold) continue;
+
+      // The conditional update is the idempotency: a second pass, or a second
+      // worker, finds handoffEscalatedAt already set and changes nothing, so
+      // nobody is woken twice for one customer.
+      const claimed = await this.prisma.conversationSession.updateMany({
+        where: { id: conversation.id, handoffEscalatedAt: null },
+        data: { handoffEscalatedAt: now },
+      });
+
+      if (claimed.count === 0) continue;
+
+      await this.prisma.outboxEvent.create({
+        data: {
+          id: randomUUID(),
+          tenantId: conversation.tenantId,
+          eventType: DomainEventType.CONVERSATION_HANDOFF_UNANSWERED,
+          aggregateType: AggregateType.CONVERSATION,
+          aggregateId: conversation.id,
+          actor: 'SYSTEM',
+          payload: {
+            conversationId: conversation.id,
+            branchId: conversation.branchId,
+            waitedSeconds,
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      this.logger.warn(
+        { conversationId: conversation.id, branchId: conversation.branchId, waitedSeconds },
+        'Customer waiting for a person; escalating',
+      );
+
+      raised += 1;
+    }
+
+    return raised;
+  }
+
+  /** How long a customer may wait for a person, per tenant. */
+  private handoffThresholdFor(settings: unknown): number {
+    const raw = (settings as { handoffResponseTimeoutSeconds?: unknown } | null)
+      ?.handoffResponseTimeoutSeconds;
+
+    return typeof raw === 'number' && Number.isFinite(raw) && raw > 0
+      ? Math.floor(raw)
+      : DEFAULT_HANDOFF_RESPONSE_SECONDS;
   }
 
   /**

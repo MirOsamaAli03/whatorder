@@ -8,7 +8,9 @@ import {
 } from '@restaurant-os/types';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_HANDOFF_RESPONSE_SECONDS,
   ESCALATION_NOTIFICATION,
+  HANDOFF_NOTIFICATION,
   MAX_NOTIFICATION_ATTEMPTS,
   NOTIFYING_ORDER_STATUSES,
   WHATSAPP_SERVICE_WINDOW_MS,
@@ -230,6 +232,43 @@ describe('which statuses notify', () => {
     // Plan 2.8: an alert on the screen nobody is looking at is not an alert,
     // and the dashboard being ignored is exactly the situation that raised it.
     expect(ESCALATION_NOTIFICATION.deliveryMode).toBe('all-channels');
+  });
+
+  it('raises the alarm when nobody answers a customer who asked for a person', () => {
+    // An unacknowledged ORDER escalated; an unanswered CUSTOMER did not, which
+    // made "somebody will reply here shortly" depend on a member of staff
+    // happening to have the inbox open (backlog B-28).
+    expect(HANDOFF_NOTIFICATION.notifyStaff).toBe(true);
+    expect(HANDOFF_NOTIFICATION.notifyCustomer).toBe(false);
+    // Every channel at once: the inbox being unwatched is what raised it.
+    expect(HANDOFF_NOTIFICATION.deliveryMode).toBe('all-channels');
+    expect(HANDOFF_NOTIFICATION.channels[0]).toBe(NotificationChannel.DASHBOARD);
+    expect(DEFAULT_HANDOFF_RESPONSE_SECONDS).toBe(300);
+  });
+
+  it('tells staff who is waiting and where, not that an order is late', () => {
+    const body = renderMessageBody('conversation_unanswered', {
+      contact: '+923001234567',
+      orderNumber: '',
+      restaurantName: 'Karachi Grill',
+      branchName: 'DHA',
+    });
+
+    expect(body).toContain('+923001234567');
+    expect(body).toContain('DHA');
+    expect(body).toContain('Conversations');
+    expect(body).not.toContain('undefined');
+  });
+
+  it('copes with a handoff from a number it cannot name', () => {
+    const body = renderMessageBody('conversation_unanswered', {
+      orderNumber: '',
+      restaurantName: 'Karachi Grill',
+    });
+
+    expect(body).toContain('A customer');
+    expect(body).toContain('Karachi Grill');
+    expect(body).not.toContain('undefined');
   });
 
   it('never sends the escalation alarm to a customer', () => {

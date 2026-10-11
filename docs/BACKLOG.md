@@ -237,18 +237,32 @@ The database is the only thing that cannot be rebuilt from the repository.
 DEPLOYMENT.md gives the `pg_dump` line; nothing runs it, and nothing copies it
 off the machine. This is the gap that would hurt most on the day it matters.
 
-### B-28. An unanswered handoff does not reach a phone
+### B-28. An unanswered handoff does not reach a phone — **closed**
 
-**Phase:** 6 · **Status:** new, split from B-24
+**Phase:** 6 · **Closed by:** the handoff escalation sweep
 
-The inbox makes a waiting customer visible to anyone looking at the dashboard,
-and the navigation badge makes it visible from any screen. It still depends on
-somebody having the dashboard open. An unacknowledged *order* escalates through
-a ladder; an unanswered *customer* does not.
+The escalation monitor now sweeps conversations sitting in HUMAN_HANDOFF past
+a threshold — five minutes by default, `handoffResponseTimeoutSeconds` per
+tenant — and raises a `ConversationHandoffUnanswered` event. The notification
+dispatcher turns it into staff notifications on every enabled channel at once,
+for the same reason the order alarm fans out: the inbox being unwatched is
+precisely the situation that raised it.
 
-**Needs:** the escalation monitor to sweep conversations in HUMAN_HANDOFF past a
-threshold and raise a staff notification the same way it raises one for an
-order — which also needs B-20, since the last rung is SMS.
+The worker does the sweep, because it is cross-tenant, and still cannot read a
+customer: a column-level grant lets it see which conversation, where, in which
+state and since when, while `external_user_id` and `context` are refused at the
+database. Naming the customer happens later, on a tenant-scoped application
+connection. A test asserts both halves.
+
+Firing once is enforced by a conditional update on `handoff_escalated_at`, and
+the marker is cleared when a person replies or hands the conversation back — so
+a second silence re-arms it rather than the conversation escalating once and
+never again.
+
+**Still depends on B-20 for the last rung.** The WhatsApp and dashboard
+notifications are delivered; SMS is recorded and logged, because no gateway is
+configured. A staff member with a phone number on their account is reached over
+WhatsApp today.
 
 ---
 
