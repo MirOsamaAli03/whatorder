@@ -148,93 +148,6 @@ against a real provider's documentation.
 
 ## Closed in the pilot-readiness pass
 
-### B-17. Nothing noticed when a kitchen screen dropped off — **closed**
-
-**Phase:** 4 · **Closed by:** the kitchen-screen presence pass
-
-The stream heartbeats every 15 seconds and the browser could already tell when
-those stopped. That covers the case where somebody is standing in front of the
-screen, and does nothing for the case that matters: the tablet is asleep, or
-off the wifi, or the tab was closed at the end of yesterday's service. To the
-kitchen there are simply no orders, which looks exactly like a quiet evening.
-
-Each heartbeat is now written down as well as sent, and the worker raises the
-alarm — every channel, staff only — when a branch has orders waiting and no
-screen has said anything for two minutes. It is the third sibling of the
-unacknowledged-order and unanswered-handoff sweeps, and the quietest failure of
-the three: the other two are at least visible to anybody looking at the
-dashboard.
-
-One row per branch, not per connection. A connection table is the obvious
-modelling and it is the wrong one: an API process killed mid-stream never
-deletes its row, so the count drifts upward and the branch looks permanently
-staffed — a monitor that fails by going quiet, which is the failure this exists
-to remove. A single `last_seen_at` rewritten by every screen cannot drift.
-
-Two conditions, and the second is what makes it liveable. There must be orders
-in CONFIRMED, PREPARING or READY: a closed restaurant has no screen on at three
-in the morning and does not want to hear about it, and an alarm that cries every
-night is one nobody reads by the end of the week. A branch with a dark screen
-and an empty queue is deliberately left un-flagged, so the first order to arrive
-while the screen is still off does raise it.
-
-Recovery needs no separate mechanism: a heartbeat clears the flag, which both
-re-arms the alarm for the next outage and stops a message going out for a
-problem that fixed itself between the sweep and the dispatch. The dispatcher
-re-counts the waiting orders rather than trusting the number in the event,
-because a message that says four when the kitchen can see six teaches staff to
-distrust the alarm.
-
-**What is not done:** the dashboard shows this only as a notification. A
-persistent "no kitchen screen connected" banner on the orders screen would be
-better, and belongs with B-19's other UI work.
-
-### B-13, B-18. Nothing deleted expired carts, keys, notifications or events — **closed**
-
-**Phase:** 3, 4 · **Closed by:** the retention sweeper
-
-Four tables grew without bound: abandoned carts, expired idempotency keys,
-finished notifications and consumed outbox events. The worker now prunes all
-four hourly. Carts and keys get a day's grace past their own expiry; the two
-logs are kept a month and a fortnight, because their value is answering "what
-did we send that customer last Tuesday".
-
-What is safe to delete is decided in the database, in a SECURITY DEFINER
-function, for two reasons. DELETE needs SELECT on the columns in its WHERE
-clause, so doing it with a column grant would have handed a background process
-standing read access to carts and to notifications — the worker can now prune
-them and still cannot read either, which a test asserts. And the outbox prune
-has to compare against the slowest consumer's cursor, which has to happen in
-one statement: reading the cursor and then deleting leaves a window where the
-dispatcher advances and an event it never handled is deleted underneath it.
-
-Nothing live is touched: a cart with no expiry, one expiring in an hour, one
-that expired a minute ago, a CHECKED_OUT cart, an unexpired key, a PENDING
-notification however old, and any outbox event above a consumer's cursor all
-survive, each with a test.
-
-One bug caught in the writing, which is the reason for the test that asserts a
-cart expiring in an hour survives. Every timestamp column here is `timestamp
-without time zone` holding UTC, because that is what Prisma writes. `now()` is
-a timestamptz, and comparing the two makes PostgreSQL localise it to the
-session's TimeZone — so on a server set to Asia/Karachi, which is the
-deployment target, "older than an hour ago" meant "older than four hours from
-now", and the first version deleted live carts and unexpired idempotency keys.
-
-### B-14. Blocked customers could still build a cart — **closed**
-
-**Phase:** 3 · **Closed by:** the retention and polish pass
-
-Two holes, both now shut. `POST /carts` refused a blocked customer but `PATCH
-/carts/:id` did not, so attaching one afterwards was the way round the check —
-and the refusal then arrived at checkout, the last step, after an address had
-been typed.
-
-Over WhatsApp it was worse: the number could browse the menu, build an order
-and choose a delivery address before being refused, and the refusal was a 403
-the conversation could only report as "something went wrong on our side". The
-bot now says so at the first message, plainly and without arguing the case.
-
 ### B-24. Inbox for handed-off conversations — **closed**
 
 **Phase:** 6 · **Closed by:** the pilot-readiness pass
@@ -326,6 +239,93 @@ never again.
 notifications are delivered; SMS is recorded and logged, because no gateway is
 configured. A staff member with a phone number on their account is reached over
 WhatsApp today.
+
+### B-17. Nothing noticed when a kitchen screen dropped off — **closed**
+
+**Phase:** 4 · **Closed by:** the kitchen-screen presence pass
+
+The stream heartbeats every 15 seconds and the browser could already tell when
+those stopped. That covers the case where somebody is standing in front of the
+screen, and does nothing for the case that matters: the tablet is asleep, or
+off the wifi, or the tab was closed at the end of yesterday's service. To the
+kitchen there are simply no orders, which looks exactly like a quiet evening.
+
+Each heartbeat is now written down as well as sent, and the worker raises the
+alarm — every channel, staff only — when a branch has orders waiting and no
+screen has said anything for two minutes. It is the third sibling of the
+unacknowledged-order and unanswered-handoff sweeps, and the quietest failure of
+the three: the other two are at least visible to anybody looking at the
+dashboard.
+
+One row per branch, not per connection. A connection table is the obvious
+modelling and it is the wrong one: an API process killed mid-stream never
+deletes its row, so the count drifts upward and the branch looks permanently
+staffed — a monitor that fails by going quiet, which is the failure this exists
+to remove. A single `last_seen_at` rewritten by every screen cannot drift.
+
+Two conditions, and the second is what makes it liveable. There must be orders
+in CONFIRMED, PREPARING or READY: a closed restaurant has no screen on at three
+in the morning and does not want to hear about it, and an alarm that cries every
+night is one nobody reads by the end of the week. A branch with a dark screen
+and an empty queue is deliberately left un-flagged, so the first order to arrive
+while the screen is still off does raise it.
+
+Recovery needs no separate mechanism: a heartbeat clears the flag, which both
+re-arms the alarm for the next outage and stops a message going out for a
+problem that fixed itself between the sweep and the dispatch. The dispatcher
+re-counts the waiting orders rather than trusting the number in the event,
+because a message that says four when the kitchen can see six teaches staff to
+distrust the alarm.
+
+**What is not done:** the dashboard shows this only as a notification. A
+persistent "no kitchen screen connected" banner on the orders screen would be
+better, and belongs with B-19's other UI work.
+
+### B-13, B-18. Nothing deleted expired carts, keys, notifications or events — **closed**
+
+**Phase:** 3, 4 · **Closed by:** the retention sweeper
+
+Four tables grew without bound: abandoned carts, expired idempotency keys,
+finished notifications and consumed outbox events. The worker now prunes all
+four hourly. Carts and keys get a day's grace past their own expiry; the two
+logs are kept a month and a fortnight, because their value is answering "what
+did we send that customer last Tuesday".
+
+What is safe to delete is decided in the database, in a SECURITY DEFINER
+function, for two reasons. DELETE needs SELECT on the columns in its WHERE
+clause, so doing it with a column grant would have handed a background process
+standing read access to carts and to notifications — the worker can now prune
+them and still cannot read either, which a test asserts. And the outbox prune
+has to compare against the slowest consumer's cursor, which has to happen in
+one statement: reading the cursor and then deleting leaves a window where the
+dispatcher advances and an event it never handled is deleted underneath it.
+
+Nothing live is touched: a cart with no expiry, one expiring in an hour, one
+that expired a minute ago, a CHECKED_OUT cart, an unexpired key, a PENDING
+notification however old, and any outbox event above a consumer's cursor all
+survive, each with a test.
+
+One bug caught in the writing, which is the reason for the test that asserts a
+cart expiring in an hour survives. Every timestamp column here is `timestamp
+without time zone` holding UTC, because that is what Prisma writes. `now()` is
+a timestamptz, and comparing the two makes PostgreSQL localise it to the
+session's TimeZone — so on a server set to Asia/Karachi, which is the
+deployment target, "older than an hour ago" meant "older than four hours from
+now", and the first version deleted live carts and unexpired idempotency keys.
+
+### B-14. Blocked customers could still build a cart — **closed**
+
+**Phase:** 3 · **Closed by:** the retention and polish pass
+
+Two holes, both now shut. `POST /carts` refused a blocked customer but `PATCH
+/carts/:id` did not, so attaching one afterwards was the way round the check —
+and the refusal then arrived at checkout, the last step, after an address had
+been typed.
+
+Over WhatsApp it was worse: the number could browse the menu, build an order
+and choose a delivery address before being refused, and the refusal was a 403
+the conversation could only report as "something went wrong on our side". The
+bot now says so at the first message, plainly and without arguing the case.
 
 ---
 
