@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
   assertLeastPrivilegeConnection,
+  connectWithRetry,
   createPrismaClient,
   describeConnection,
   withTenantContext,
@@ -34,7 +35,18 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit(): Promise<void> {
-    await this.client.$connect();
+    // Waits for the database rather than exiting when it is not up yet.
+    //
+    // After a host reboot every container starts at once, so this process can
+    // easily be running before Postgres finishes replaying its write-ahead log
+    // (backlog B-31). Exiting there costs nothing — Docker restarts us — but it
+    // fills the log with what looks like a broken deployment.
+    await connectWithRetry(this.client, {
+      onRetry: (attempt, _error, waitMs) =>
+        this.logger.warn(
+          `Database not ready (attempt ${attempt}); retrying in ${waitMs}ms`,
+        ),
+    });
 
     // Fail fast if the runtime role can bypass RLS — otherwise the second
     // line of defence would be silently absent (plan 2.7).
