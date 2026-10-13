@@ -91,33 +91,6 @@ or, better, asking for the delivery address first and using the existing §29
 zone resolution to choose the branch, which is the answer the rest of the system
 already has.
 
-### B-26. Modifiers and variants cannot be chosen in the conversation
-
-**Phase:** 6 · **Status:** deliberate scope limit, now handled safely
-
-The cart and order services fully support variants and modifier groups, and the
-POS and dashboard expose them. The WhatsApp flow adds an item at its base price
-with no options, because asking "which size?" and "any extras?" over reply
-buttons is several more states and the deterministic flow was worth landing
-first.
-
-**This was worse than first recorded.** A dish with a REQUIRED modifier group
-was offered, tapped, given a quantity, an order type and an address — and then
-refused at the final step by checkout with "choose at least 1 option", which
-the conversation could only report as "something went wrong on our side". Six
-steps to a dead end. Found by running the containerised stack against the
-seeded demo menu, where exactly such a dish exists.
-
-Such dishes are now hidden from the WhatsApp menu rather than led up to, with a
-regression test. They stay fully orderable on the POS and the dashboard, which
-can ask the question. A restaurant whose menu is mostly single-price dishes is
-unaffected; one selling by size simply offers fewer dishes over WhatsApp until
-the sub-flow exists.
-
-**Needs:** a modifier sub-flow: required groups asked in order as button or list
-prompts, optional ones offered once, then the existing addItem call with the
-chosen optionIds — which already validates that each belongs to the item.
-
 ### B-27. Free text outside the keyword list is not understood
 
 **Phase:** 6 · **Status:** by design, closed by Phase 11
@@ -163,6 +136,36 @@ against a real provider's documentation.
 ---
 
 ## Closed in the pilot-readiness pass
+
+### B-26. Sizes and options could not be chosen over WhatsApp — **closed**
+
+**Phase:** 6 · **Closed by:** the sizes-and-options pass
+
+The conversation now assembles an item one question at a time: the size when
+there is more than one, then each modifier group in menu order, then the
+quantity. Single-choice groups advance on the tap; multi-select ones re-send the
+list with the chosen options ticked and a Done row, and a required group offers
+no way past itself. Nothing reaches the cart until every question is answered,
+so abandoning the flow leaves no half-built item behind for checkout to refuse.
+
+This was the worse half of the old entry. A dish with a required modifier group
+used to be offered, tapped, given a quantity, an order type and an address — and
+then refused at the final step with "choose at least 1 option", which the
+conversation could only report as "something went wrong on our side". Six steps
+to a dead end, found by running the containerised stack against the seeded demo
+menu. The stop-gap hid such dishes from the WhatsApp menu entirely; for a pizza
+place selling everything by size, that is most of the menu. They are offered
+again now.
+
+Which question comes next lives in `packages/domain/src/item-choices.ts`, pure
+and tested exhaustively (19 cases: a group with one option, an optional group
+skipped, a minimum of two half met, a group whose every option is sold out). The
+conversation service asks and records; it decides nothing. Eleven more tests
+drive a real pizza — two sizes, a required crust, optional extras — through the
+webhook end to end.
+
+One thing fixed on the way: the cart summary named the size but not the chosen
+options, so a +100 thick crust showed a price the line did not explain.
 
 ### B-24. Inbox for handed-off conversations — **closed**
 

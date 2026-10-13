@@ -167,6 +167,10 @@ export const ReplyAction = {
   TRACK: 'track',
   HANDOFF: 'agent',
   MORE: 'more',
+  /** A size, an extra, and "that's everything" for a multi-select group. */
+  VARIANT: 'var',
+  OPTION: 'opt',
+  DONE: 'done',
 } as const;
 export type ReplyAction = (typeof ReplyAction)[keyof typeof ReplyAction];
 
@@ -277,6 +281,11 @@ const REPLY_INTENTS: Readonly<Record<ReplyAction, ConversationIntent>> = {
   [ReplyAction.TRACK]: ConversationIntent.TRACK_ORDER,
   [ReplyAction.HANDOFF]: ConversationIntent.HUMAN_HANDOFF,
   [ReplyAction.MORE]: ConversationIntent.BROWSE_MENU,
+  // All three continue assembling the item in hand, so they share the intent
+  // that means "keep building this line".
+  [ReplyAction.VARIANT]: ConversationIntent.ADD_TO_CART,
+  [ReplyAction.OPTION]: ConversationIntent.ADD_TO_CART,
+  [ReplyAction.DONE]: ConversationIntent.ADD_TO_CART,
 };
 
 export interface ResolvedIntent {
@@ -325,10 +334,12 @@ export function resolveIntent(
   // A bare number means whatever was in that position on the customer's
   // screen. Checked in this order deliberately.
   if (/^\d{1,2}$/.test(lowered)) {
-    // A quantity first: "5" is a legitimate answer to "how many?" even though
-    // only three buttons were offered, so the displayed options must not cap
-    // it.
-    if (state === ConversationState.BUILDING_CART) {
+    // A quantity first, but only when one was actually asked for: "5" is a
+    // legitimate answer to "how many?" even though three buttons were shown,
+    // so the displayed options must not cap it. While a size or a topping is
+    // the question, the number means the nth thing on screen instead.
+    if (state === ConversationState.BUILDING_CART && context.awaiting !== 'modifier'
+        && context.awaiting !== 'variant') {
       return {
         intent: ConversationIntent.ADD_TO_CART,
         reply: { action: ReplyAction.QUANTITY, value: lowered },
@@ -409,9 +420,24 @@ function matches(lowered: string, intents: readonly ConversationIntent[]): boole
  */
 export interface ConversationContext {
   cartId?: string;
-  /** The item a quantity is about to be given for. */
+  /** The item being assembled, and the choices made for it so far. */
   pendingItemId?: string;
   pendingItemName?: string;
+  /** The chosen size, when the dish comes in more than one. */
+  pendingVariantId?: string;
+  /** Chosen modifier options, across every group. */
+  pendingOptionIds?: string[];
+  /** Which modifier group the customer is being asked about. */
+  pendingGroupIndex?: number;
+  /**
+   * What the bot last asked for.
+   *
+   * A bare number means different things at each step — "2" is a size while
+   * choosing one and a quantity while being asked how many — and the
+   * conversation state alone cannot tell them apart, because the whole of
+   * assembling an item happens inside BUILDING_CART.
+   */
+  awaiting?: 'variant' | 'modifier' | 'quantity';
   /** The category currently being browsed, for a "more" page. */
   categoryId?: string;
   /** Which page of a long list the customer is on. */
@@ -538,6 +564,46 @@ export function cartMessage(cart: CartSummary): string {
 
 export function addedToCartMessage(name: string, quantity: number): string {
   return `Added ${quantity} x ${name}.`;
+}
+
+export function askVariantMessage(name: string): string {
+  return `Which size of ${name} would you like?`;
+}
+
+/**
+ * Asks about one group of extras.
+ *
+ * The wording changes with the rules, because "choose at least 1" and "add any
+ * you like" are different instructions and a customer who is told the wrong
+ * one gets stuck — either tapping Done on a group that will not let them, or
+ * waiting for a question that has already been answered.
+ */
+export function askModifierMessage(
+  itemName: string,
+  groupName: string,
+  rules: { required: boolean; minSelections: number; maxSelections: number },
+): string {
+  const required = rules.required || rules.minSelections > 0;
+  const minimum = Math.max(1, rules.minSelections);
+  const maximum = Math.max(1, rules.maxSelections);
+
+  if (required && maximum === 1) {
+    return `${groupName} for your ${itemName} — please pick one.`;
+  }
+  if (required) {
+    return `${groupName} for your ${itemName} — pick at least ${minimum}, then tap Done.`;
+  }
+  if (maximum === 1) {
+    return `${groupName} for your ${itemName}? Pick one, or tap Skip.`;
+  }
+  return `${groupName} for your ${itemName}? Add any you like, then tap Done.`;
+}
+
+/** Shown when a customer tries to leave a group before meeting its minimum. */
+export function needMoreOptionsMessage(groupName: string, minimum: number): string {
+  return minimum === 1
+    ? `Please choose one from ${groupName} first.`
+    : `Please choose at least ${minimum} from ${groupName} first.`;
 }
 
 export function askQuantityMessage(name: string): string {

@@ -161,6 +161,36 @@ describe('resolveIntent', () => {
     }
   });
 
+  it('reads a bare number as a size while a size is the question', () => {
+    // The whole of assembling an item happens inside BUILDING_CART, so the
+    // state alone cannot tell "2" the size from "2" the quantity.
+    const choosingSize = {
+      awaiting: 'variant' as const,
+      shownReplyIds: ['var:small-1', 'var:large-2'],
+    };
+
+    expect(resolveIntent({ text: '2' }, ConversationState.BUILDING_CART, choosingSize)).toEqual({
+      intent: ConversationIntent.ADD_TO_CART,
+      reply: { action: ReplyAction.VARIANT, value: 'large-2' },
+    });
+  });
+
+  it('reads the same number as a topping while toppings are the question', () => {
+    const choosingToppings = {
+      awaiting: 'modifier' as const,
+      shownReplyIds: ['opt:cheese', 'opt:olives', 'done'],
+    };
+
+    expect(resolveIntent({ text: '1' }, ConversationState.BUILDING_CART, choosingToppings)).toEqual(
+      { intent: ConversationIntent.ADD_TO_CART, reply: { action: ReplyAction.OPTION, value: 'cheese' } },
+    );
+
+    // And the last row ends the group.
+    expect(
+      resolveIntent({ text: '3' }, ConversationState.BUILDING_CART, choosingToppings).reply,
+    ).toEqual({ action: ReplyAction.DONE });
+  });
+
   it('treats a bare number as a quantity while building a cart', () => {
     const resolved = resolveIntent({ text: '3' }, ConversationState.BUILDING_CART);
     expect(resolved.intent).toBe(ConversationIntent.ADD_TO_CART);

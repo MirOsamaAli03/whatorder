@@ -151,9 +151,10 @@ or two. If nothing happens:
 
 - **A multi-branch tenant on one number** picks the oldest active branch for
   every conversation. Give each outlet its own number, or wait for B-25.
-- **Modifiers and variants** cannot be chosen in the conversation (B-26). Fine
-  for a menu of single-price dishes; a menu sold by size is not usable over
-  WhatsApp yet.
+- **Sizes and options** are asked for one question at a time, so a menu sold by
+  size works. The bot asks the size, then each options group, then the quantity.
+  What it cannot do is let a customer change an answer mid-way — tapping the
+  wrong size means cancelling the item and starting it again.
 - **Free text outside the keyword list** is not understood (B-27) — the bot
   offers its buttons again. English and Roman Urdu keywords are covered, and a
   typed dish name searches the menu.

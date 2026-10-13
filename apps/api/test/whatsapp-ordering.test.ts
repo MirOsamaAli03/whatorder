@@ -41,6 +41,7 @@ describe('whatsapp ordering', () => {
   let ownerToken: string;
   let branchId: string;
   let burgerId: string;
+  let categoryId: string;
   let friesId: string;
   let provider: LogWhatsAppProvider;
 
@@ -69,7 +70,7 @@ describe('whatsapp ordering', () => {
     });
 
     const category = await post('/api/v1/menu/categories', { name: 'Burgers' });
-    const categoryId = category.json().data.id;
+    categoryId = category.json().data.id;
 
     burgerId = (
       await post('/api/v1/menu/items', {
@@ -161,6 +162,23 @@ describe('whatsapp ordering', () => {
   function rowIds(message: OutboundMessage): string[] {
     if (message.kind !== 'list') return [];
     return message.sections.flatMap((section) => section.rows.map((row) => row.id));
+  }
+
+  /**
+   * The number a customer would type to choose a row, found by its name.
+   *
+   * Positions are not stable: the API returns variants and options sorted by
+   * sort order and then by name, so "Large" precedes "Small" and "Thick"
+   * precedes "Thin". A test that typed "2" for the large one would be asserting
+   * alphabetical order, not behaviour.
+   */
+  function rowNumber(messages: OutboundMessage[], name: string): string {
+    const list = messages.find((message) => message.kind === 'list');
+    const rows = list?.kind === 'list' ? list.sections.flatMap((s) => s.rows) : [];
+    const index = rows.findIndex((row) => row.title.includes(name));
+
+    expect(index, `${name} should be offered`).toBeGreaterThanOrEqual(0);
+    return String(index + 1);
   }
 
   function bodies(messages: OutboundMessage[]): string {
@@ -497,51 +515,162 @@ describe('whatsapp ordering', () => {
   });
 
   /**
-   * A dish the conversation cannot finish must never be offered.
+   * A pizza: a size, a required crust, optional extras (backlog B-26).
    *
-   * Found by running the containerised stack against the seeded demo menu: the
-   * customer tapped a dish with a required "Portion" group, went through
-   * quantity, order type and confirmation, and checkout refused the whole
-   * order with "choose at least 1 option" — which the conversation can only
-   * report as "something went wrong on our side". Six steps to a dead end.
+   * These dishes used to be hidden from the WhatsApp menu entirely, because
+   * the flow added items at base price and checkout refused them at the last
+   * step. For a menu sold by size that meant almost nothing was orderable.
    */
-  describe('dishes that need a choice (backlog B-26)', () => {
-    it('hides an item whose modifier group is required', async () => {
-      const withChoice = await post('/api/v1/menu/items', {
-        name: 'Biryani Needs A Portion',
-        basePrice: '600.00',
-      });
-      const itemId = withChoice.json().data.id;
+  describe('dishes that need a choice', () => {
+    let pizzaId: string;
 
-      const modifier = await post('/api/v1/menu/modifiers', {
-        name: 'Portion',
+    beforeAll(async () => {
+      const pizza = await post('/api/v1/menu/items', {
+        name: 'Pizza',
+        basePrice: '900.00',
+        categoryId,
+      });
+      pizzaId = pizza.json().data.id;
+
+      for (const variant of [
+        { name: 'Small', price: '700.00' },
+        { name: 'Large', price: '1200.00' },
+      ]) {
+        const added = await post(`/api/v1/menu/items/${pizzaId}/variants`, variant);
+        expect(added.statusCode, JSON.stringify(added.json())).toBe(201);
+      }
+
+      const crust = await post('/api/v1/menu/modifiers', {
+        name: 'Crust',
         selectionType: 'SINGLE',
         required: true,
         minSelections: 1,
         maxSelections: 1,
         options: [
-          { name: 'Half', priceDelta: '0.00' },
-          { name: 'Full', priceDelta: '300.00' },
+          { name: 'Thin', priceDelta: '0.00' },
+          { name: 'Thick', priceDelta: '100.00' },
         ],
       });
+      expect(crust.statusCode, JSON.stringify(crust.json())).toBe(201);
 
-      expect(modifier.statusCode, JSON.stringify(modifier.json())).toBe(201);
+      const extras = await post('/api/v1/menu/modifiers', {
+        name: 'Extras',
+        selectionType: 'MULTIPLE',
+        required: false,
+        minSelections: 0,
+        maxSelections: 3,
+        options: [
+          { name: 'Olives', priceDelta: '50.00' },
+          { name: 'Jalapenos', priceDelta: '80.00' },
+        ],
+      });
+      expect(extras.statusCode).toBe(201);
 
       const attached = await context.app.inject({
         method: 'PUT',
-        url: `/api/v1/menu/items/${itemId}/modifiers`,
+        url: `/api/v1/menu/items/${pizzaId}/modifiers`,
         headers: authHeaders(ownerToken),
-        payload: { modifierIds: [modifier.json().data.id] },
+        payload: { modifierIds: [crust.json().data.id, extras.json().data.id] },
       });
-      expect(attached.statusCode, JSON.stringify(attached.json())).toBe(200);
+      expect(attached.statusCode).toBe(200);
+    });
 
+    it('offers the pizza rather than hiding it', async () => {
       const replies = await say('menu');
       const list = replies.find((message) => message.kind === 'list');
+      expect(rowIds(list!)).toContain(`item:${pizzaId}`);
+    });
 
-      // Offered on the POS and the dashboard, which can ask the question;
-      // not here, where the flow has no way to.
-      expect(rowIds(list!)).not.toContain(`item:${itemId}`);
-      expect(rowIds(list!)).toContain(`item:${burgerId}`);
+    it('asks the size first, priced per size', async () => {
+      const replies = await tap(`item:${pizzaId}`, 'Pizza');
+      const list = replies.find((message) => message.kind === 'list');
+
+      expect(bodies(replies)).toContain('size');
+      const titles =
+        list?.kind === 'list' ? list.sections.flatMap((s) => s.rows.map((r) => r.title)) : [];
+      const descriptions =
+        list?.kind === 'list'
+          ? list.sections.flatMap((s) => s.rows.map((r) => r.description ?? ''))
+          : [];
+
+      expect(titles.join(' ')).toContain('Large');
+      // The price shown is the variant's, not the base.
+      expect(descriptions.join(' ')).toContain('1200.00');
+    });
+
+    it('then the crust, with no way to skip a required one', async () => {
+      const sizes = await tap(`item:${pizzaId}`, 'Pizza');
+      const list = (await say(rowNumber(sizes, 'Large'))).find((m) => m.kind === 'list');
+
+      expect(list?.kind).toBe('list');
+      const rows = list?.kind === 'list' ? list.sections.flatMap((s) => s.rows) : [];
+
+      expect(rows.map((r) => r.title).join(' ')).toContain('Thin');
+      // A required single-choice group must not offer a way past itself.
+      expect(rows.map((r) => r.id)).not.toContain('done');
+    });
+
+    it('lets extras be added and finished, then asks how many', async () => {
+      const sizes = await tap(`item:${pizzaId}`, 'Pizza');
+      const crusts = await say(rowNumber(sizes, 'Large'));
+
+      const extras = await say(rowNumber(crusts, 'Thin'));
+      expect(extras.some((m) => m.kind === 'list')).toBe(true);
+
+      // Optional multi-select: a chosen one is ticked so the customer can see
+      // what they already have, since the message is re-sent after each tap.
+      const afterOlives = await say(rowNumber(extras, 'Olives'));
+      const ticked =
+        afterOlives
+          .flatMap((m) => (m.kind === 'list' ? m.sections.flatMap((s) => s.rows) : []))
+          .map((row) => row.title)
+          .join(' ');
+      expect(ticked).toContain('✓');
+
+      const done = await say(rowNumber(afterOlives, 'Done'));
+      expect(bodies(done)).toContain('How many');
+    });
+
+    it('lets a half-answered dish be abandoned', async () => {
+      // There is no "back" from a mistyped size, so "cancel" has to work while
+      // a question is outstanding — which means the keyword must not be read as
+      // an answer to it. Documented as the way out in WHATSAPP_ONBOARDING.md.
+      const sizes = await tap(`item:${pizzaId}`, 'Pizza');
+      await say(rowNumber(sizes, 'Small'));
+
+      const cancelled = await say('cancel');
+      expect(bodies(cancelled)).toContain('cleared that');
+
+      const stored = await session();
+      const held = stored.context as Record<string, unknown>;
+      expect(held.pendingItemId, 'no half-built pizza left behind').toBeUndefined();
+      expect(held.pendingVariantId).toBeUndefined();
+    });
+
+    it('puts the size and the extras on the order', async () => {
+      const sizes = await tap(`item:${pizzaId}`, 'Pizza');
+      const crusts = await say(rowNumber(sizes, 'Large'));
+      const extras = await say(rowNumber(crusts, 'Thin'));
+      const quantity = await say(rowNumber(extras, 'Skip'));
+      expect(bodies(quantity)).toContain('How many');
+
+      const added = await say('1');
+
+      // Named back to the customer as a dish, not as a list of ids.
+      expect(bodies(added)).toContain('Pizza (Large, Thin)');
+      // Priced from the variant, not from the base price of 900.
+      expect(bodies(added)).toContain('1 x Pizza (Large, Thin) — PKR 1200.00');
+
+      const cart = await context.admin.cart.findFirstOrThrow({
+        where: { tenantId: tenant.organizationId },
+        orderBy: { createdAt: 'desc' },
+        include: { items: { include: { modifiers: true } } },
+      });
+
+      const line = cart.items.find((row) => row.menuItemId === pizzaId);
+      expect(line, 'the pizza should be on the cart').toBeTruthy();
+      expect(line!.variantId, 'with a size').toBeTruthy();
+      expect(line!.modifiers.length, 'and a crust').toBeGreaterThan(0);
     });
   });
 

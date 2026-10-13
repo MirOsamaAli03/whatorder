@@ -4,6 +4,17 @@ import {
   CONVERSATION_TTL_MS,
   ORDER_TYPE_LABELS,
   ReplyAction,
+  askModifierMessage,
+  askVariantMessage,
+  availableOptions,
+  chooseOption,
+  chosenInGroup,
+  describeChoices,
+  finishGroup,
+  needMoreOptionsMessage,
+  nextItemQuestion,
+  type ChoosableItem,
+  type ItemChoices,
   addedToCartMessage,
   askAddressMessage,
   askOrderTypeMessage,
@@ -406,12 +417,18 @@ export class ConversationService {
   }
 
   /**
-   * Adds a dish — in two steps, because a quantity has to come from somewhere.
+   * Builds one line of the order, one question at a time.
    *
-   * Tapping a dish sets it aside and asks how many; the answer then adds it.
-   * The dish is held in the session rather than encoded into the quantity
-   * buttons so that a customer who types "3" instead of tapping is understood
-   * identically.
+   * A pizza is not a single tap: it has a size, perhaps a crust, perhaps
+   * extras, and WhatsApp can ask about exactly one of those per message. So
+   * this is a small loop — ask the next outstanding question, record the
+   * answer, ask the next — with the "what is outstanding" decision living in
+   * @restaurant-os/domain where it is tested exhaustively.
+   *
+   * Everything chosen is held in the conversation's context and only turned
+   * into a cart line at the end. A half-answered pizza is therefore not in the
+   * cart at all, which is what stops a customer abandoning the flow and
+   * leaving a sizeless item behind for checkout to refuse.
    */
   private async add(
     auth: AuthContext,
@@ -419,6 +436,7 @@ export class ConversationService {
     context: ConversationContext,
     reply?: { action: string; value?: string },
   ): Promise<Outcome> {
+    // A new dish: start it from scratch.
     if (reply?.action === ReplyAction.ITEM && reply.value) {
       const item = await this.menu.getItem(auth, reply.value, turn.branchId).catch(() => null);
 
@@ -432,52 +450,99 @@ export class ConversationService {
         };
       }
 
+      return this.askNextForItem(turn, this.toChoosable(item), {
+        ...context,
+        pendingItemId: item.id,
+        pendingItemName: item.name,
+        pendingVariantId: undefined,
+        pendingOptionIds: [],
+        pendingGroupIndex: 0,
+      });
+    }
+
+    if (!context.pendingItemId) return this.browse(auth, turn, context);
+
+    const loaded = await this.menu
+      .getItem(auth, context.pendingItemId, turn.branchId)
+      .catch(() => null);
+
+    if (!loaded) {
+      // Withdrawn from the menu mid-conversation. Say so rather than failing
+      // at checkout with the customer having answered three questions.
       return {
-        state: ConversationState.BUILDING_CART,
-        context: { ...context, pendingItemId: item.id, pendingItemName: item.name },
+        state: ConversationState.BROWSING_MENU,
+        context: this.clearPending(context),
         messages: [
-          buttonsMessage({
-            to: turn.contactNumber,
-            body: askQuantityMessage(item.name),
-            buttons: [
-              { id: encodeReplyId(ReplyAction.QUANTITY, '1'), title: '1' },
-              { id: encodeReplyId(ReplyAction.QUANTITY, '2'), title: '2' },
-              { id: encodeReplyId(ReplyAction.QUANTITY, '3'), title: '3' },
-            ],
-          }),
+          textMessage(turn.contactNumber, itemUnavailableMessage(context.pendingItemName ?? 'that dish')),
         ],
       };
     }
 
+    const item = this.toChoosable(loaded);
+    let choices = this.choicesFrom(context);
+
+    if (reply?.action === ReplyAction.VARIANT && reply.value) {
+      const variant = item.variants.find((candidate) => candidate.id === reply.value);
+      if (variant) choices = { ...choices, variantId: variant.id };
+      return this.askNextForItem(turn, item, this.contextFrom(context, choices));
+    }
+
+    if (reply?.action === ReplyAction.OPTION && reply.value) {
+      const group = item.modifiers[choices.groupIndex];
+      if (group) choices = chooseOption(group, choices, reply.value);
+      return this.askNextForItem(turn, item, this.contextFrom(context, choices));
+    }
+
+    if (reply?.action === ReplyAction.DONE) {
+      const group = item.modifiers[choices.groupIndex];
+
+      if (group) {
+        const result = finishGroup(group, choices);
+
+        if (!result.moved) {
+          // Asked again rather than allowed through: an item built below its
+          // minimum is one checkout will refuse at the last step.
+          return this.askNextForItem(
+            turn,
+            item,
+            this.contextFrom(context, choices),
+            needMoreOptionsMessage(group.name, Math.max(1, group.minSelections)),
+          );
+        }
+
+        choices = result.choices;
+      }
+
+      return this.askNextForItem(turn, item, this.contextFrom(context, choices));
+    }
+
+    // Anything else at this point is the quantity.
     const quantity = Number(reply?.value ?? '1');
-    if (!context.pendingItemId || !Number.isInteger(quantity) || quantity < 1) {
-      return this.browse(auth, turn, context);
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      return this.askNextForItem(turn, item, this.contextFrom(context, choices));
     }
 
     const cartId = await this.ensureCart(auth, turn, context);
 
     // The cart service validates availability and the item's own modifier
-    // rules. Nothing here second-guesses it.
+    // rules all over again. Nothing here second-guesses it — this layer
+    // decides which questions to ask, not whether the answers are legal.
     await this.cart.addItem(auth, cartId, {
-      menuItemId: context.pendingItemId,
+      menuItemId: item.id,
       quantity,
+      ...(choices.variantId ? { variantId: choices.variantId } : {}),
+      ...(choices.optionIds.length > 0 ? { optionIds: choices.optionIds } : {}),
     });
 
     const summary = await this.cartSummary(auth, cartId);
-    const name = context.pendingItemName ?? 'that';
 
     return {
       state: ConversationState.BUILDING_CART,
-      context: {
-        ...context,
-        cartId,
-        pendingItemId: undefined,
-        pendingItemName: undefined,
-      },
+      context: { ...this.clearPending(context), cartId },
       messages: [
         buttonsMessage({
           to: turn.contactNumber,
-          body: `${addedToCartMessage(name, quantity)}\n\n${cartMessage(summary)}`,
+          body: `${addedToCartMessage(describeChoices(item, choices), quantity)}\n\n${cartMessage(summary)}`,
           buttons: [
             { id: encodeReplyId(ReplyAction.BROWSE), title: 'Add more' },
             { id: encodeReplyId(ReplyAction.CHECKOUT), title: 'Checkout' },
@@ -485,6 +550,169 @@ export class ConversationService {
           ],
         }),
       ],
+    };
+  }
+
+  /**
+   * Asks whatever is still outstanding for the item being built.
+   *
+   * One place, so every path through `add` ends the same way: record the
+   * answer, then ask this. A handler that forgot to would leave the customer
+   * holding a half-built pizza and no question.
+   */
+  private askNextForItem(
+    turn: ConversationTurn,
+    item: ChoosableItem,
+    context: ConversationContext,
+    prefix?: string,
+  ): Outcome {
+    const choices = this.choicesFrom(context);
+    const question = nextItemQuestion(item, choices);
+    const say = (body: string) => (prefix ? `${prefix}\n\n${body}` : body);
+
+    if (question.kind === 'variant') {
+      return {
+        state: ConversationState.BUILDING_CART,
+        context: { ...context, awaiting: 'variant' },
+        messages: [
+          listMessage({
+            to: turn.contactNumber,
+            body: say(askVariantMessage(item.name)),
+            buttonLabel: 'Choose size',
+            sections: [
+              {
+                title: 'Sizes',
+                rows: numberedRows(
+                  question.variants.map((variant) => ({
+                    id: encodeReplyId(ReplyAction.VARIANT, variant.id),
+                    title: variant.name,
+                    description: `${item.currency} ${variant.price}`,
+                  })),
+                ),
+              },
+            ],
+          }),
+        ],
+      };
+    }
+
+    if (question.kind === 'modifier') {
+      const group = question.modifier;
+      const optional = !group.required && group.minSelections === 0;
+      const multiple = Math.max(1, group.maxSelections) > 1;
+      const chosen = chosenInGroup(group, choices);
+
+      const rows = numberedRows(
+        availableOptions(group).map((option) => ({
+          id: encodeReplyId(ReplyAction.OPTION, option.id),
+          // A chosen one is marked, because a multi-select message is sent
+          // again after each tap and the customer needs to see what they
+          // already have.
+          title: chosen.includes(option.id) ? `${option.name} ✓` : option.name,
+          ...(option.priceDelta !== '0.00'
+            ? { description: `+ ${item.currency} ${option.priceDelta}` }
+            : {}),
+        })),
+      );
+
+      // Only where it is actually possible, so a required single-choice group
+      // offers no way past it.
+      if (multiple || optional) {
+        rows.push({
+          id: encodeReplyId(ReplyAction.DONE),
+          title: optional && chosen.length === 0 ? 'Skip' : 'Done',
+        });
+      }
+
+      return {
+        state: ConversationState.BUILDING_CART,
+        context: { ...context, awaiting: 'modifier' },
+        messages: [
+          listMessage({
+            to: turn.contactNumber,
+            body: say(
+              askModifierMessage(item.name, group.name, {
+                required: group.required,
+                minSelections: group.minSelections,
+                maxSelections: group.maxSelections,
+              }),
+            ),
+            buttonLabel: 'Choose',
+            sections: [{ title: group.name, rows }],
+          }),
+        ],
+      };
+    }
+
+    return {
+      state: ConversationState.BUILDING_CART,
+      context: { ...context, awaiting: 'quantity' },
+      messages: [
+        buttonsMessage({
+          to: turn.contactNumber,
+          body: say(askQuantityMessage(describeChoices(item, choices))),
+          buttons: [
+            { id: encodeReplyId(ReplyAction.QUANTITY, '1'), title: '1' },
+            { id: encodeReplyId(ReplyAction.QUANTITY, '2'), title: '2' },
+            { id: encodeReplyId(ReplyAction.QUANTITY, '3'), title: '3' },
+          ],
+        }),
+      ],
+    };
+  }
+
+  /** The menu item, in the shape the choice rules work on. */
+  private toChoosable(item: {
+    id: string;
+    name: string;
+    currency: string;
+    price: string;
+    variants?: Array<{ id: string; name: string; price: string }>;
+    modifiers?: Array<{
+      id: string;
+      name: string;
+      required: boolean;
+      minSelections: number;
+      maxSelections: number;
+      options: Array<{ id: string; name: string; priceDelta: string; isAvailable: boolean }>;
+    }>;
+  }): ChoosableItem {
+    return {
+      id: item.id,
+      name: item.name,
+      currency: item.currency,
+      price: item.price,
+      variants: item.variants ?? [],
+      modifiers: item.modifiers ?? [],
+    };
+  }
+
+  private choicesFrom(context: ConversationContext): ItemChoices {
+    return {
+      ...(context.pendingVariantId ? { variantId: context.pendingVariantId } : {}),
+      optionIds: context.pendingOptionIds ?? [],
+      groupIndex: context.pendingGroupIndex ?? 0,
+    };
+  }
+
+  private contextFrom(context: ConversationContext, choices: ItemChoices): ConversationContext {
+    return {
+      ...context,
+      pendingVariantId: choices.variantId,
+      pendingOptionIds: choices.optionIds,
+      pendingGroupIndex: choices.groupIndex,
+    };
+  }
+
+  private clearPending(context: ConversationContext): ConversationContext {
+    return {
+      ...context,
+      pendingItemId: undefined,
+      pendingItemName: undefined,
+      pendingVariantId: undefined,
+      pendingOptionIds: undefined,
+      pendingGroupIndex: undefined,
+      awaiting: undefined,
     };
   }
 
@@ -751,37 +979,19 @@ export class ConversationService {
     });
   }
 
-  /** Visible to a customer and not sold out. */
   /**
-   * Visible, in stock, and completable in a conversation.
+   * Visible to a customer and not sold out.
    *
-   * The last of those is the subtle one. The flow adds an item at its base
-   * price with no options (backlog B-26), so a dish with a REQUIRED modifier
-   * group — "choose a portion" — cannot be ordered this way. Without this
-   * check the customer taps it, chooses a quantity, picks an order type, gives
-   * an address, taps Place order, and only then does checkout refuse it with
-   * "choose at least 1 option", which the conversation can only report as
-   * "something went wrong on our side".
-   *
-   * Leading somebody through six steps to a dead end is worse than not
-   * offering the dish, so it is hidden from the WhatsApp menu until the
-   * modifier sub-flow exists. It stays fully orderable on the POS and the
-   * dashboard, which can ask the question.
+   * It used to also exclude anything needing a choice — a dish with a required
+   * modifier group could not be completed, so offering it led the customer
+   * through six steps to a refusal at checkout. The flow can now ask those
+   * questions, so the only reasons to withhold a dish are the honest ones.
    */
-  private orderable(item: {
-    isVisible?: boolean;
-    availability: string;
-    modifiers?: Array<{ required: boolean; minSelections: number }>;
-  }): boolean {
-    const needsAChoice = (item.modifiers ?? []).some(
-      (modifier) => modifier.required || modifier.minSelections > 0,
-    );
-
+  private orderable(item: { isVisible?: boolean; availability: string }): boolean {
     return (
       (item.isVisible ?? true) &&
       item.availability !== MenuItemAvailability.OUT_OF_STOCK &&
-      item.availability !== MenuItemAvailability.HIDDEN &&
-      !needsAChoice
+      item.availability !== MenuItemAvailability.HIDDEN
     );
   }
 
@@ -816,7 +1026,7 @@ export class ConversationService {
 
     return {
       lines: cart.items.map((item) => ({
-        name: item.variantName ? `${item.name} (${item.variantName})` : item.name,
+        name: this.lineName(item),
         quantity: item.quantity,
         lineTotal: item.lineTotal,
       })),
@@ -826,6 +1036,27 @@ export class ConversationService {
       total: cart.totals.total,
       currency: cart.currency,
     };
+  }
+
+  /**
+   * One cart line, named as the customer built it.
+   *
+   * The size and every chosen option, not just the size: a thick crust costs
+   * 100 more, and a line that reads "Pizza (Large) — PKR 1300.00" next to a
+   * menu that says 1200 is a customer asking the restaurant why. It also keeps
+   * this consistent with the confirmation sent the moment the item was added.
+   */
+  private lineName(item: {
+    name: string;
+    variantName?: string | null;
+    modifiers?: Array<{ optionName: string }>;
+  }): string {
+    const parts = [
+      ...(item.variantName ? [item.variantName] : []),
+      ...(item.modifiers ?? []).map((modifier) => modifier.optionName),
+    ];
+
+    return parts.length > 0 ? `${item.name} (${parts.join(', ')})` : item.name;
   }
 
   private async organization(auth: AuthContext): Promise<{ name: string }> {
