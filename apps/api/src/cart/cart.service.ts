@@ -102,6 +102,12 @@ export class CartService {
       if (input.customerId) {
         const customer = await tx.customer.findUnique({ where: { id: input.customerId } });
         if (!customer) throw new NotFoundError('Customer', input.customerId);
+        // The same check `create` makes. Without it, attaching a blocked
+        // customer to an existing cart was the way round the one in `create`,
+        // and the refusal did not arrive until checkout (backlog B-14).
+        if (customer.isBlocked) {
+          throw new DomainError(ErrorCode.FORBIDDEN, 'This customer is blocked', 403);
+        }
       }
 
       await tx.cart.update({

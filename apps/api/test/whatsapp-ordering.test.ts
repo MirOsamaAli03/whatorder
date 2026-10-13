@@ -675,6 +675,38 @@ describe('whatsapp ordering', () => {
   });
 
   describe('the boundaries', () => {
+    it('turns a blocked number away at the first message', async () => {
+      // A different number from the rest of the file, so blocking it affects
+      // nothing else. isBlocked used to be enforced at checkout and when
+      // attaching a customer to a cart, which let a blocked number browse the
+      // menu, build an order and give an address before being refused — by a
+      // 403 the conversation could only report as "something went wrong on our
+      // side" (backlog B-14).
+      const blockedNumber = '923001112223';
+
+      await context.admin.customer.create({
+        data: {
+          tenantId: tenant.organizationId,
+          phone: `+${blockedNumber}`,
+          whatsappNumber: `+${blockedNumber}`,
+          isBlocked: true,
+        },
+      });
+
+      const replies = await deliver({
+        id: `wamid-${randomUUID()}`,
+        from: blockedNumber,
+        timestamp: String(Math.floor(Date.now() / 1000)),
+        type: 'text',
+        text: { body: 'menu' },
+      });
+
+      // Told, rather than silently ignored or shown a menu it cannot order from.
+      expect(bodies(replies)).toContain('cannot take orders from this number');
+      // And no menu came with it.
+      expect(replies.some((message) => message.kind === 'list')).toBe(false);
+    });
+
     it('goes quiet once a person takes over', async () => {
       const handoff = await say('I want to talk to a human');
       expect(bodies(handoff)).toContain('team');

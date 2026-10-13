@@ -16,6 +16,7 @@ import {
   type ChoosableItem,
   type ItemChoices,
   addedToCartMessage,
+  blockedCustomerMessage,
   askAddressMessage,
   askOrderTypeMessage,
   askQuantityMessage,
@@ -146,6 +147,25 @@ export class ConversationService {
     if (session.state === ConversationState.HUMAN_HANDOFF) {
       await this.touch(turn, session.id);
       return [];
+    }
+
+    // Checked here, at the top, rather than where the cart is created.
+    //
+    // `isBlocked` was enforced at checkout and when attaching a customer to a
+    // cart, which meant a blocked number could browse the menu, build an order
+    // and choose an address before being refused — and refused by a 403 the
+    // conversation could only report as "something went wrong on our side"
+    // (backlog B-14). Say so at the first message instead.
+    //
+    // The cost is one indexed lookup per inbound message, which is the right
+    // trade: the alternative is each handler remembering, and the one that
+    // forgets is the hole.
+    const customer = await this.findCustomer(auth, turn.contactNumber);
+
+    if (customer?.isBlocked) {
+      await this.touch(turn, session.id);
+      const organization = await this.organization(auth);
+      return [textMessage(turn.contactNumber, blockedCustomerMessage(organization.name))];
     }
 
     const input: NormalizedInput = { text: turn.text, replyId: turn.replyId };
@@ -1080,11 +1100,11 @@ export class ConversationService {
   private async findCustomer(
     auth: AuthContext,
     phone: string,
-  ): Promise<{ id: string; name: string | null } | null> {
+  ): Promise<{ id: string; name: string | null; isBlocked: boolean } | null> {
     return this.prisma.forTenant(auth.tenantId, (tx) =>
       tx.customer.findFirst({
         where: { OR: [{ phone }, { whatsappNumber: phone }] },
-        select: { id: true, name: true },
+        select: { id: true, name: true, isBlocked: true },
       }),
     );
   }

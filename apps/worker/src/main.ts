@@ -16,6 +16,7 @@ import pino from 'pino';
 import { loadWorkerConfig } from './config';
 import { EscalationMonitor } from './escalation-monitor';
 import { OutboxPublisher } from './outbox-publisher';
+import { RetentionSweeper } from './retention-sweeper';
 
 /**
  * Background worker (ENGINEERING_SPEC.md 32, 33, 58).
@@ -24,11 +25,12 @@ import { OutboxPublisher } from './outbox-publisher';
  * long escalation sweep must never occupy a request handler, and the worker can
  * be restarted or scaled without touching the API.
  *
- * Four jobs today:
+ * Five jobs today:
  *   OutboxPublisher        — drains committed domain events to Redis
  *   EscalationMonitor      — raises the alarm on unacknowledged orders
  *   NotificationDispatcher — turns those events into notification rows
  *   NotificationSender     — delivers them, with backoff
+ *   RetentionSweeper       — deletes what has served its purpose
  *
  * The last two are separate on purpose. Deciding that somebody should be told
  * is cheap and must never be blocked; actually telling them involves a third
@@ -112,10 +114,15 @@ async function bootstrap(): Promise<void> {
     },
   );
 
+  const retention = new RetentionSweeper(prisma, logger.child({ job: 'retention' }), {
+    pollMs: config.retentionPollMs,
+  });
+
   publisher.start();
   escalations.start();
   dispatcher.start();
   sender.start();
+  retention.start();
 
   logger.info('Restaurant OS worker running');
 
@@ -128,6 +135,7 @@ async function bootstrap(): Promise<void> {
     await escalations.stop();
     await dispatcher.stop();
     await sender.stop();
+    await retention.stop();
     await redis.quit().catch(() => redis.disconnect());
     await prisma.$disconnect();
     await appPrisma.$disconnect();

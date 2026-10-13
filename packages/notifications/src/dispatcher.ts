@@ -7,6 +7,7 @@ import {
 import {
   ESCALATION_NOTIFICATION,
   HANDOFF_NOTIFICATION,
+  KDS_OFFLINE_NOTIFICATION,
   notificationForOrderStatus,
   type MessageVariables,
   type NotificationSpec,
@@ -199,6 +200,10 @@ export class NotificationDispatcher {
       return HANDOFF_NOTIFICATION;
     }
 
+    if (eventType === DomainEventType.KITCHEN_SCREEN_OFFLINE) {
+      return KDS_OFFLINE_NOTIFICATION;
+    }
+
     if (eventType !== DomainEventType.ORDER_STATUS_CHANGED) return null;
 
     const toStatus = readString(payload, 'toStatus');
@@ -222,6 +227,12 @@ export class NotificationDispatcher {
     // failure the alarm exists to prevent.
     if (eventType === DomainEventType.CONVERSATION_HANDOFF_UNANSWERED) {
       return this.planHandoffNotifications(tx, tenantId, eventId, eventType, spec, payload);
+    }
+
+    // Nor is an offline kitchen screen. It is about a branch, and there may be
+    // many orders waiting rather than one to name.
+    if (eventType === DomainEventType.KITCHEN_SCREEN_OFFLINE) {
+      return this.planKitchenScreenNotifications(tx, tenantId, eventId, eventType, spec, payload);
     }
 
     const orderId = readString(payload, 'orderId');
@@ -358,6 +369,94 @@ export class NotificationDispatcher {
    * raised the event it *can* read the conversation and name the customer —
    * which is the whole reason the two halves are split.
    */
+  /**
+   * Who to tell that a kitchen screen is dark.
+   *
+   * Keyed on the branch rather than an order, and it re-counts the waiting
+   * orders rather than trusting the number in the event: the sweep ran up to a
+   * second ago, and a message that says four orders are waiting when the
+   * kitchen can see six teaches staff to distrust the alarm.
+   *
+   * Nothing is sent if the queue has since cleared or a screen has come back.
+   * Waking somebody about a problem that fixed itself is how an alarm earns the
+   * right to be ignored.
+   */
+  private async planKitchenScreenNotifications(
+    tx: TransactionClient,
+    tenantId: string,
+    eventId: string,
+    eventType: string,
+    spec: NotificationSpec,
+    payload: Prisma.JsonValue,
+  ): Promise<number> {
+    const branchId = readString(payload, 'branchId');
+    if (!branchId) return 0;
+
+    const [organization, branch, presence] = await Promise.all([
+      tx.organization.findUnique({ where: { id: tenantId }, select: { name: true } }),
+      tx.branch.findUnique({ where: { id: branchId }, select: { name: true } }),
+      tx.kdsPresence.findUnique({ where: { branchId }, select: { offlineAlertedAt: true } }),
+    ]);
+
+    // A heartbeat since the sweep clears offlineAlertedAt, which is the signal
+    // that a screen is back.
+    if (!presence?.offlineAlertedAt) return 0;
+
+    const waitingOrders = await tx.order.count({
+      where: {
+        branchId,
+        status: { in: [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY] },
+      },
+    });
+
+    if (waitingOrders === 0) return 0;
+
+    const preferences = await tx.notificationPreference.findMany({ where: { tenantId } });
+    const enabled = (channel: NotificationChannel): boolean =>
+      preferences.find(
+        (row) => row.recipientType === RecipientType.STAFF && row.channel === channel,
+      )?.enabled ?? true;
+
+    const staff = await this.staffFor(tx, tenantId, branchId);
+
+    const variables: MessageVariables = {
+      orderNumber: '',
+      restaurantName: organization?.name ?? 'the restaurant',
+      branchName: branch?.name ?? null,
+      waitingOrders,
+    };
+
+    const rows: Prisma.NotificationCreateManyInput[] = [];
+
+    for (const member of staff) {
+      for (const channel of this.channelsFor(spec, (channel) => {
+        if (!enabled(channel)) return false;
+        if (channel === NotificationChannel.DASHBOARD) return true;
+        return Boolean(member.phone);
+      })) {
+        rows.push({
+          tenantId,
+          branchId,
+          eventId,
+          eventType,
+          recipientType: RecipientType.STAFF,
+          recipientId: member.id,
+          destination: channel === NotificationChannel.DASHBOARD ? member.id : member.phone,
+          channel,
+          templateKey: spec.templateKey,
+          payload: { variables } as unknown as Prisma.InputJsonValue,
+          status: NotificationStatus.PENDING,
+          nextAttemptAt: new Date(),
+        });
+      }
+    }
+
+    if (rows.length === 0) return 0;
+
+    const result = await tx.notification.createMany({ data: rows, skipDuplicates: true });
+    return result.count;
+  }
+
   private async planHandoffNotifications(
     tx: TransactionClient,
     tenantId: string,

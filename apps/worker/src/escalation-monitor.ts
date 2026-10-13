@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from '@restaurant-os/database';
 import {
   DEFAULT_ESCALATION_LADDER,
   DEFAULT_HANDOFF_RESPONSE_SECONDS,
+  KDS_OFFLINE_SECONDS,
   normalizeEscalationLadder,
   dueEscalations,
   type EscalationRung,
@@ -17,6 +18,14 @@ import type { Logger } from 'pino';
 
 /** How far back to look. Older than this is a support problem, not an alert. */
 const LOOKBACK_HOURS = 12;
+
+/**
+ * Orders a kitchen screen is responsible for.
+ *
+ * READY is included: a ready order nobody collects is exactly what a dark
+ * screen causes, and the kitchen is still the place that notices.
+ */
+const KITCHEN_STATUSES = [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY];
 
 /**
  * Raises the alarm when an order goes unacknowledged (ENGINEERING_SPEC.md 33).
@@ -147,6 +156,89 @@ export class EscalationMonitor {
 
     await this.resolveAcknowledged();
     raised += await this.sweepUnansweredHandoffs(now, settingsByTenant);
+    raised += await this.sweepOfflineKitchenScreens(now);
+
+    return raised;
+  }
+
+  /**
+   * Raises the alarm when a branch has orders in the kitchen and no kitchen
+   * screen (ENGINEERING_SPEC.md 70; backlog B-17).
+   *
+   * The third sibling of the two sweeps above, and the quietest failure of the
+   * three. An unacknowledged order and an unanswered customer are at least
+   * visible to anyone looking at the dashboard. A kitchen whose screen went to
+   * sleep shows nothing at all — which is indistinguishable, from the kitchen,
+   * from a quiet evening.
+   *
+   * Two conditions, and the second is the one that makes this liveable:
+   *
+   *   * Nothing has heartbeated for the threshold. The record is per branch and
+   *     rewritten by every screen, so it cannot drift upward the way a count of
+   *     open connections does when a process is killed.
+   *   * There is work waiting. A closed restaurant has no screen on at three in
+   *     the morning and does not want to hear about it; an alarm that cries
+   *     every night is one nobody reads by the end of the week.
+   */
+  private async sweepOfflineKitchenScreens(now: Date): Promise<number> {
+    const staleBefore = new Date(now.getTime() - KDS_OFFLINE_SECONDS * 1000);
+
+    const stale = await this.prisma.kdsPresence.findMany({
+      where: { lastSeenAt: { lt: staleBefore }, offlineAlertedAt: null },
+      select: { branchId: true, tenantId: true, lastSeenAt: true },
+      take: 200,
+    });
+
+    let raised = 0;
+
+    for (const presence of stale) {
+      const waiting = await this.prisma.order.count({
+        where: {
+          branchId: presence.branchId,
+          status: { in: KITCHEN_STATUSES },
+        },
+      });
+
+      // Nothing to miss. Deliberately left un-alerted rather than marked, so
+      // that the first order to arrive while the screen is still off does raise
+      // the alarm on the next pass.
+      if (waiting === 0) continue;
+
+      // The conditional update is the idempotency, as with handoffs: a second
+      // pass or a second worker finds it already set and does nothing, so one
+      // outage wakes somebody once rather than every five seconds.
+      const claimed = await this.prisma.kdsPresence.updateMany({
+        where: { branchId: presence.branchId, offlineAlertedAt: null },
+        data: { offlineAlertedAt: now },
+      });
+
+      if (claimed.count === 0) continue;
+
+      const offlineSeconds = Math.floor((now.getTime() - presence.lastSeenAt.getTime()) / 1000);
+
+      await this.prisma.outboxEvent.create({
+        data: {
+          id: randomUUID(),
+          tenantId: presence.tenantId,
+          eventType: DomainEventType.KITCHEN_SCREEN_OFFLINE,
+          aggregateType: AggregateType.BRANCH,
+          aggregateId: presence.branchId,
+          actor: 'SYSTEM',
+          payload: {
+            branchId: presence.branchId,
+            waitingOrders: waiting,
+            offlineSeconds,
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      this.logger.warn(
+        { branchId: presence.branchId, waiting, offlineSeconds },
+        'Kitchen screen offline with orders waiting; escalating',
+      );
+
+      raised += 1;
+    }
 
     return raised;
   }

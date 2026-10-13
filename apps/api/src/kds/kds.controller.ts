@@ -9,6 +9,7 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { orderChannel, RealtimeService, type RealtimeMessage } from '../realtime/realtime.service';
 import { StreamTicketService } from '../realtime/stream-ticket.service';
 import { kdsSinceSchema, kdsStreamSchema, type KdsSinceDto, type KdsStreamDto } from './kds.dto';
+import { KdsPresenceService } from './kds-presence.service';
 import { KdsService } from './kds.service';
 
 /** How often to send a heartbeat comment down an idle stream. */
@@ -21,6 +22,7 @@ export class KdsController {
     private readonly kds: KdsService,
     private readonly realtime: RealtimeService,
     private readonly tickets: StreamTicketService,
+    private readonly presence: KdsPresenceService,
   ) {}
 
   /** The full state of a kitchen screen, plus the sequence watermark. */
@@ -151,6 +153,10 @@ export class KdsController {
       heartbeatMs: HEARTBEAT_MS,
     });
 
+    // Recorded server-side as well as sent, so that a screen which goes quiet
+    // is noticed by something other than the screen itself (backlog B-17).
+    void this.presence.touch(claims.tenantId, claims.branchId, true);
+
     const channel = orderChannel(claims.tenantId, claims.branchId);
 
     const unsubscribe = await this.realtime.subscribe(channel, (message: RealtimeMessage) => {
@@ -163,6 +169,9 @@ export class KdsController {
     // socket still looks open (plan 2.8).
     const heartbeat = setInterval(() => {
       reply.raw.write(`: heartbeat ${Date.now()}\n\n`);
+      // The same beat, written down. Not awaited: the kitchen's stream does not
+      // wait on a monitoring write.
+      void this.presence.touch(claims.tenantId, claims.branchId);
     }, HEARTBEAT_MS);
 
     const cleanup = (): void => {

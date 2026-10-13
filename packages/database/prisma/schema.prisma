@@ -168,6 +168,7 @@ model Branch {
   deliveryZones      DeliveryZone[]
   carts              Cart[]
   orders             Order[]
+  kdsPresence        KdsPresence?
 
   @@unique([tenantId, slug])
   @@index([tenantId, status])
@@ -1286,6 +1287,41 @@ model Notification {
   @@index([status, nextAttemptAt])
   @@index([tenantId, createdAt])
   @@map("notifications")
+}
+
+/// Whether a branch has a live kitchen screen (ENGINEERING_SPEC.md 70; backlog B-17).
+///
+/// One row per branch, not per connection. A connection table would be the
+/// obvious modelling, and it would be wrong: an API process killed mid-stream
+/// never gets to delete its row, so the count drifts upward and the branch looks
+/// permanently staffed. A single `last_seen_at`, rewritten by every heartbeat
+/// from every screen, cannot drift — if nothing has written for two minutes then
+/// nothing is connected, whatever happened to the process that was.
+model KdsPresence {
+  /// The branch IS the key: one row per branch, by construction.
+  branchId String @id @map("branch_id") @db.Uuid
+  /// Carried for Row-Level Security, which is keyed on it like every other table.
+  tenantId String @map("tenant_id") @db.Uuid
+
+  /// The last heartbeat from any screen at this branch. The whole mechanism.
+  lastSeenAt DateTime @map("last_seen_at")
+  /// When a screen last opened a stream, for the dashboard to show.
+  lastConnectedAt DateTime @map("last_connected_at")
+
+  /// Set when the alarm is raised, and cleared by the next heartbeat.
+  ///
+  /// This is what stops a five-second sweep alerting twelve times a minute, and
+  /// why recovery needs no separate mechanism: a screen that comes back writes a
+  /// heartbeat, which clears this, so the next outage alerts again.
+  offlineAlertedAt DateTime? @map("offline_alerted_at")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([lastSeenAt])
+  @@index([tenantId])
+  @@map("kds_presence")
 }
 
 /// Per-consumer progress through the outbox.
