@@ -18,8 +18,8 @@ ordering and point-of-sale system used by restaurants, home kitchens and small
 chains in Pakistan. Customers order through WhatsApp; this dashboard is what the
 restaurant's own staff use to run the business.
 
-I need a complete visual redesign: a design system plus a redesign of six
-screens. The current interface works but looks like an internal developer tool,
+I need a complete visual redesign: a design system, a redesign of six existing
+screens, and one new screen designed from scratch. The current interface works but looks like an internal developer tool,
 not a product a restaurant owner would be pleased to put on their counter.
 
 ### Who uses it, and where
@@ -37,7 +37,7 @@ The owner being on a phone matters most: today the dashboard is **completely
 unusable on a phone**, which is the single biggest failure in the current
 design.
 
-### What the six screens are
+### The screens
 
 1. **Login** — email and password. There is also a second state where an account
    belongs to more than one restaurant and must pick one.
@@ -54,6 +54,9 @@ design.
    buttons for "sold out", a branch-specific price, and edit.
 6. **Settings** — connecting a WhatsApp number, message templates, and a grid of
    which notification channels are on for which recipients.
+7. **Menu structure editor — this screen does not exist yet and needs designing
+   from nothing.** See *The seventh screen* below. It is the most important
+   piece of this brief: without it a restaurant cannot set up its own menu.
 
 ### The specific problems to fix
 
@@ -122,6 +125,65 @@ Dish names carry Urdu alongside English (`چکن تکہ`). It renders at the sam
 caption size as everything else with no font or line-height consideration and no
 RTL handling. Urdu needs a proper size, font stack and line height.
 
+### The seventh screen — the menu structure editor
+
+**This screen has never been built.** Everything described here is already
+supported by the API and enforced correctly when a customer orders; there has
+simply never been a screen for it, so today it can only be set up by a developer
+calling the API directly. A restaurant cannot put its own menu together, which
+makes it the single thing standing between this product and a real customer.
+
+Design it as part of the redesign rather than after it.
+
+There are three things to manage, and the relationships between them are what
+the design has to make obvious.
+
+**Categories** — the groups a menu is divided into: BBQ, Burgers, Rice,
+Beverages. They can be created, renamed, reordered and deleted. Order matters:
+it is the order the customer sees in WhatsApp. Reordering should be direct —
+dragging, or clear up/down controls.
+
+**Sizes (variants)** — belong to **one dish only**. A pizza has Small 700,
+Large 1200. Each has a name, a price that *replaces* the dish's base price, an
+optional "default" flag, and an order. A dish with one size shows no choice to
+the customer; a dish with two or more makes the customer pick. This is the
+feature a pizza restaurant lives on.
+
+**Option groups (modifiers)** — these are **shared across dishes**, and that is
+the critical distinction the design must carry. "Spice level" is defined once
+and attached to fifteen dishes. Editing it changes all fifteen. So there needs
+to be both a **library** of groups and a way to **attach** groups to a
+particular dish, and the user must never be confused about which of the two they
+are doing. Deleting or editing a shared group should warn how many dishes it
+affects.
+
+Each group has: a name, whether the customer picks **one** or **many**, whether
+it is **required**, and a minimum and maximum number of choices. Inside it are
+options, each with a name, a price difference (which may be zero or negative)
+and whether it is currently available.
+
+Those four settings together are the hard part of this screen. "Pick one,
+required" and "pick up to 3, optional" produce completely different behaviour
+for the customer, and a restaurant owner is not going to reason about
+`minSelections` and `maxSelections`. Design controls that state the outcome in
+plain words — something closer to *"Customer must choose exactly one"* /
+*"Customer can add up to 3, or none"* — with the numbers behind it. Show a live
+preview of what the customer will be asked in WhatsApp if you can; it is the
+clearest way to make the settings legible.
+
+Also worth knowing while designing it:
+
+- Dishes carry an **Urdu name** as well as an English one, so every name field
+  is really two.
+- A dish has a chain-wide price and can have a **different price at one branch**,
+  and can be marked sold out at one branch while on sale at another. The
+  existing menu screen already shows this; the editor should not contradict it.
+- Setting up a first menu is a long, repetitive job done once. A fast path —
+  duplicating a dish, adding several options without a round trip per option —
+  is worth more here than anywhere else in the product.
+- An empty menu is the first thing a new restaurant sees. That empty state is
+  effectively the product's onboarding, and should be designed as such.
+
 ### What I want
 
 **A warm, confident, food-appropriate visual identity.** Vibrant, but used with
@@ -145,8 +207,8 @@ display should work in both.
    states (default, hover, focus, active, disabled, loading) for buttons,
    inputs, selects, checkboxes, pills and cards. Focus states must be visible
    for keyboard users.
-2. **Each of the six screens**, at desktop (1440), tablet (900) and phone (390).
-   The phone layouts matter as much as the desktop ones.
+2. **Each of the seven screens**, at desktop (1440), tablet (900) and phone
+   (390). The phone layouts matter as much as the desktop ones.
 3. **The kitchen display treated as its own thing** — full-bleed, no app
    navigation, type large enough to read at two metres, colour carrying the
    urgency, and a clear visual difference between the four columns.
@@ -160,7 +222,7 @@ display should work in both.
 
 - The app is **Next.js 15 with React 19**. Styling is **one plain CSS file**
   (`globals.css`, 881 lines) using CSS custom properties. There is no Tailwind
-  and no component library, and this was a deliberate decision for six screens.
+  and no component library, and this was a deliberate decision at this size.
   Prefer a design that stays plain CSS with custom properties. If you believe a
   dependency is genuinely necessary, say so explicitly and justify it rather
   than assuming it.
@@ -177,8 +239,9 @@ display should work in both.
 
 ### What not to change
 
-- The information on each screen is right. The problem is presentation, not
-  what is being shown.
+- On the six existing screens the information is right. The problem is
+  presentation, not what is being shown. The seventh screen is the exception:
+  there is nothing there to preserve.
 - The kitchen display's core idea — four columns, a timer per order, colour
   escalating with age — is correct and should be made stronger, not replaced.
 - The waiting time being the loudest element in the conversations list is
