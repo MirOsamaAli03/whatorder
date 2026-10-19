@@ -34,3 +34,6 @@ infrastructure/docker/data/
 # Playwright output
 test-results/
 playwright-report/
+
+# Local UI audit screenshots, regenerated on demand.
+ui-audit/
