@@ -18,7 +18,7 @@ export default function Home() {
   }, [session.status, router]);
 
   return (
-    <div className="auth">
+    <div className="app auth-loading">
       <p className="muted">Loading…</p>
     </div>
   );

@@ -41,6 +41,10 @@ export class ApiError extends Error {
 }
 
 export interface SessionUser {
+  /** Who they are, for the sidebar. Read by the API rather than carried in the token. */
+  name: string;
+  email: string;
+  organization: { id: string; name: string; slug: string; type: string };
   userId: string;
   tenantId: string;
   membershipId: string;

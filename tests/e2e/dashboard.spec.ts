@@ -177,7 +177,7 @@ test.describe('navigation and permissions', () => {
     const nav = page.locator('.nav');
 
     await expect(nav.getByRole('link', { name: 'Live orders' })).toBeVisible();
-    await expect(nav.getByRole('link', { name: 'Kitchen' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Kitchen display' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Menu' })).toBeVisible();
   });
 
@@ -336,7 +336,7 @@ test.describe('live orders', () => {
 test.describe('kitchen display', () => {
   test('renders the four columns from spec §34', async ({ page }) => {
     await signIn(page, OWNER);
-    await page.getByRole('link', { name: 'Kitchen' }).click();
+    await page.getByRole('link', { name: 'Kitchen display' }).click();
 
     for (const column of ['New', 'Accepted', 'Preparing', 'Ready']) {
       await expect(page.getByRole('region', { name: column })).toBeVisible();
@@ -345,7 +345,7 @@ test.describe('kitchen display', () => {
 
   test('reports the live connection state', async ({ page }) => {
     await signIn(page, OWNER);
-    await page.getByRole('link', { name: 'Kitchen' }).click();
+    await page.getByRole('link', { name: 'Kitchen display' }).click();
 
     // The stream is an optimisation; this indicator is how a cook knows whether
     // to trust the screen (plan §2.8).
@@ -354,7 +354,7 @@ test.describe('kitchen display', () => {
 
   test('offers an explicit sound control rather than failing silently', async ({ page }) => {
     await signIn(page, OWNER);
-    await page.getByRole('link', { name: 'Kitchen' }).click();
+    await page.getByRole('link', { name: 'Kitchen display' }).click();
 
     // Browsers block audio until a gesture, so a screen that never asks has no
     // audible alert and never says so.
@@ -367,7 +367,7 @@ test.describe('kitchen display', () => {
 
   test('receives a new order over the live stream without a reload', async ({ page }) => {
     await signIn(page, OWNER);
-    await page.getByRole('link', { name: 'Kitchen' }).click();
+    await page.getByRole('link', { name: 'Kitchen display' }).click();
     await selectBranch(page, 'DHA');
     await expect(page.locator('.kds-status').first()).toContainText('Live', { timeout: 20_000 });
 
@@ -382,7 +382,7 @@ test.describe('kitchen display', () => {
 
   test('advances an order from the kitchen screen', async ({ page }) => {
     await signIn(page, OWNER);
-    await page.getByRole('link', { name: 'Kitchen' }).click();
+    await page.getByRole('link', { name: 'Kitchen display' }).click();
     await selectBranch(page, 'DHA');
 
     const order = await placeOrder();
@@ -413,7 +413,7 @@ test.describe('kitchen display', () => {
 
   test('shows a ticking timer on each card', async ({ page }) => {
     await signIn(page, OWNER);
-    await page.getByRole('link', { name: 'Kitchen' }).click();
+    await page.getByRole('link', { name: 'Kitchen display' }).click();
     await selectBranch(page, 'DHA');
 
     const order = await placeOrder();
@@ -433,7 +433,7 @@ test.describe('kitchen display', () => {
 
   test('a kitchen user sees only their own branch', async ({ page }) => {
     await signIn(page, KITCHEN);
-    await page.getByRole('link', { name: 'Kitchen' }).click();
+    await page.getByRole('link', { name: 'Kitchen display' }).click();
 
     // Branch-scoped staff get a label, not a picker, because there is nothing
     // to choose between (spec §7).

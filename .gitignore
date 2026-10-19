@@ -37,3 +37,8 @@ playwright-report/
 
 # Local UI audit screenshots, regenerated on demand.
 ui-audit/
+
+# The redesign package from the design tool: 30MB of zips plus its own
+# source. globals.css is copied into apps/dashboard; the rest is reference
+# material that does not belong in the history.
+restaurant-os-redesign/

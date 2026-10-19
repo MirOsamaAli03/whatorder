@@ -3,14 +3,25 @@
 import { Permission } from '@restaurant-os/types';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
+import {
+  ConversationsIcon,
+  KitchenIcon,
+  MenuIcon,
+  OrdersIcon,
+  SettingsIcon,
+} from '@/components/icons';
 import { api } from '@/lib/api-client';
 import { BranchProvider } from '@/lib/branch';
 import { useRequireSession } from '@/lib/session';
 
 interface NavItem {
   href: string;
+  /** The full name, used in the sidebar and as the accessible name. */
   label: string;
+  /** The short name, used when the sidebar collapses to a rail or a bottom bar. */
+  short: string;
+  icon: ComponentType<{ className?: string }>;
   permission: Permission;
 }
 
@@ -20,13 +31,49 @@ interface NavItem {
  * and permissions"). Kitchen staff see the kitchen display and nothing else.
  *
  * Hiding a link is courtesy, not security — the API refuses the request anyway.
+ *
+ * Two labels each, because the same link is a row in a 232px sidebar, an icon
+ * in an 88px rail and a tab in a bottom bar. `label` is always the accessible
+ * name regardless of which is on screen, so assistive technology and the
+ * browser tests see one stable name at every width; `short` is contained within
+ * it, which is what WCAG 2.5.3 asks for.
  */
 const NAV: NavItem[] = [
-  { href: '/orders', label: 'Live orders', permission: Permission.ORDERS_VIEW },
-  { href: '/kds', label: 'Kitchen', permission: Permission.ORDERS_VIEW },
-  { href: '/conversations', label: 'Conversations', permission: Permission.CUSTOMERS_VIEW },
-  { href: '/menu', label: 'Menu', permission: Permission.MENU_VIEW },
-  { href: '/settings', label: 'Settings', permission: Permission.ORGANIZATION_VIEW },
+  {
+    href: '/orders',
+    label: 'Live orders',
+    short: 'Orders',
+    icon: OrdersIcon,
+    permission: Permission.ORDERS_VIEW,
+  },
+  {
+    href: '/kds',
+    label: 'Kitchen display',
+    short: 'Kitchen',
+    icon: KitchenIcon,
+    permission: Permission.ORDERS_VIEW,
+  },
+  {
+    href: '/conversations',
+    label: 'Conversations',
+    short: 'Inbox',
+    icon: ConversationsIcon,
+    permission: Permission.CUSTOMERS_VIEW,
+  },
+  {
+    href: '/menu',
+    label: 'Menu',
+    short: 'Menu',
+    icon: MenuIcon,
+    permission: Permission.MENU_VIEW,
+  },
+  {
+    href: '/settings',
+    label: 'Settings',
+    short: 'Settings',
+    icon: SettingsIcon,
+    permission: Permission.ORGANIZATION_VIEW,
+  },
 ];
 
 /**
@@ -67,6 +114,20 @@ function useWaitingCount(enabled: boolean): number {
   return waiting;
 }
 
+/** The restaurant's initial, for the brand mark. */
+function initial(name: string): string {
+  return name.trim().charAt(0).toUpperCase() || 'R';
+}
+
+/** Somebody's initials, for the avatar. */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  const first = parts[0]!.charAt(0);
+  const last = parts.length > 1 ? parts[parts.length - 1]!.charAt(0) : '';
+  return (first + last).toUpperCase();
+}
+
 export default function AppLayout({ children }: { children: ReactNode }) {
   const session = useRequireSession();
   const pathname = usePathname();
@@ -79,47 +140,79 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (session.status !== 'authenticated' || !session.user) {
     return (
-      <div className="auth">
+      <div className="app auth-loading">
         <p className="muted">Loading…</p>
       </div>
     );
   }
 
   const visible = NAV.filter((item) => session.can(item.permission));
+  const organizationName = session.user.organization.name;
+  const personName = session.user.name || session.user.email;
 
   return (
     <BranchProvider>
-      <div className="shell">
-        <aside className="sidebar">
+      <div className="app shell">
+        {/* Phone only: the sidebar has become a bottom bar, so the restaurant
+            name and the branch switcher need somewhere to live. */}
+        <header className="topbar">
+          <span className="brand-mark" aria-hidden="true">
+            {initial(organizationName)}
+          </span>
+          <span className="topbar-name">{organizationName}</span>
+        </header>
+
+        <aside className="sidebar" aria-label="Main navigation">
           <div className="brand">
-            Restaurant OS
-            <small>{session.user.roles.join(', ') || 'No role'}</small>
+            <span className="brand-mark" aria-hidden="true">
+              {initial(organizationName)}
+            </span>
+            <span className="brand-text">
+              <span className="brand-name">{organizationName}</span>
+              <span className="brand-sub">Restaurant OS</span>
+            </span>
           </div>
 
           <nav className="nav">
-            {visible.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={pathname.startsWith(item.href) ? 'page' : undefined}
-              >
-                {item.label}
-                {item.href === '/conversations' && waiting > 0 ? (
-                  <span className="nav-badge" aria-label={`${waiting} waiting`}>
-                    {waiting}
-                  </span>
-                ) : null}
-              </Link>
-            ))}
+            {visible.map((item) => {
+              const Icon = item.icon;
+              const current = pathname.startsWith(item.href);
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="nav-item"
+                  aria-label={item.label}
+                  aria-current={current ? 'page' : undefined}
+                >
+                  <Icon />
+                  <span className="nav-label">{item.label}</span>
+                  <span className="nav-short">{item.short}</span>
+                  {item.href === '/conversations' && waiting > 0 ? (
+                    <span className="badge badge-danger">{waiting}</span>
+                  ) : null}
+                </Link>
+              );
+            })}
           </nav>
 
-          <div className="sidebar-footer">
-            {session.isBranchScoped ? (
-              <span>Access limited to assigned branches</span>
-            ) : (
-              <span>Organization-wide access</span>
-            )}
-            <button type="button" className="btn btn-sm" onClick={() => void session.signOut()}>
+          <div className="sidebar-foot">
+            <span className="avatar" aria-hidden="true">
+              {initials(personName)}
+            </span>
+            <span className="who">
+              <b>{personName}</b>
+              <span className="faint">
+                {session.user.roles.join(', ') || 'No role'}
+                {session.isBranchScoped ? ' · Access limited to assigned branches' : ''}
+              </span>
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm sign-out"
+              onClick={() => void session.signOut()}
+            >
               Sign out
             </button>
           </div>

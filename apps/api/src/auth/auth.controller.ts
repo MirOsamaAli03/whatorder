@@ -99,8 +99,13 @@ export class AuthController {
 
   /** GET /api/v1/auth/me — the caller's identity and effective grants. */
   @Get('me')
-  me(@CurrentUser() auth: AuthContext) {
+  async me(@CurrentUser() auth: AuthContext) {
+    // The name and the restaurant are read rather than taken from the token:
+    // see AuthService.identity.
+    const identity = await this.auth.identity(auth);
+
     return {
+      ...identity,
       userId: auth.userId,
       tenantId: auth.tenantId,
       membershipId: auth.membershipId,

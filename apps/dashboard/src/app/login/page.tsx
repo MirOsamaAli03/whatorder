@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
+import { AlertIcon, CheckIcon } from '@/components/icons';
 import { ApiError, login, type OrganizationChoice } from '@/lib/api-client';
 import { useSession } from '@/lib/session';
 
@@ -11,6 +12,11 @@ import { useSession } from '@/lib/session';
  * Handles the case the API surfaces rather than hiding it: a person who works
  * for two organizations gets asked which one they are signing in to, because
  * one email can hold memberships in several tenants (plan §2.4).
+ *
+ * Two panels. The left one is not decoration: this is the first screen a
+ * restaurant owner sees, and it is the only place in the product that says what
+ * the product is. It collapses to a strip on tablet and disappears on a phone,
+ * where the form is all that matters.
  */
 export default function LoginPage() {
   const router = useRouter();
@@ -55,89 +61,144 @@ export default function LoginPage() {
     }
   }
 
-  if (choices) {
-    return (
-      <main className="auth">
-        <div className="auth-card card stack">
-          <div>
-            <h1>Choose an organization</h1>
-            <p className="faint">This account belongs to more than one.</p>
-          </div>
-
-          {error ? <div className="banner banner-error">{error}</div> : null}
-
-          <div className="stack" style={{ gap: 8 }}>
-            {choices.map((organization) => (
-              <button
-                key={organization.id}
-                type="button"
-                className="btn"
-                disabled={submitting}
-                onClick={(event) => void submit(event, organization.slug)}
-                style={{ justifyContent: 'space-between', width: '100%' }}
-              >
-                <span>{organization.name}</span>
-                <span className="faint">{organization.type}</span>
-              </button>
-            ))}
-          </div>
-
-          <button type="button" className="btn btn-sm" onClick={() => setChoices(null)}>
-            Back
-          </button>
-        </div>
-      </main>
-    );
-  }
-
   return (
-    <main className="auth">
-      <form className="auth-card card stack" onSubmit={(event) => void submit(event)}>
-        <div>
-          <h1>Restaurant OS</h1>
-          <p className="faint">Sign in to your dashboard</p>
+    <div className="app auth">
+      <section className="auth-brand" aria-label="Restaurant OS">
+        <div className="auth-logo">
+          <span className="brand-mark" aria-hidden="true">
+            R
+          </span>
+          Restaurant OS
         </div>
 
-        {error ? (
-          <div className="banner banner-error" role="alert">
-            {error}
-          </div>
-        ) : null}
-
-        <div>
-          <div className="field">
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="username"
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-            {fieldErrors.email ? <p className="field-error">{fieldErrors.email}</p> : null}
-          </div>
-
-          <div className="field">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-            {fieldErrors.password ? <p className="field-error">{fieldErrors.password}</p> : null}
-          </div>
+        <div className="stack" style={{ gap: 18 }}>
+          {/* "Welcome", in Urdu. Marked with lang so a screen reader switches
+              voice, and left out of the tablet layout where there is no room. */}
+          <span className="auth-hello" lang="ur">
+            خوش آمدید
+          </span>
+          <h2 className="auth-headline">Every WhatsApp order, one counter.</h2>
+          <ul className="auth-points">
+            <li>
+              <CheckIcon />
+              Orders arrive straight from WhatsApp
+            </li>
+            <li>
+              <CheckIcon />
+              A kitchen screen that shows what&rsquo;s running late
+            </li>
+            <li>
+              <CheckIcon />
+              Your menu in English and Urdu
+            </li>
+          </ul>
         </div>
 
-        <button type="submit" className="btn btn-primary btn-lg" disabled={submitting}>
-          {submitting ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
-    </main>
+        <span />
+      </section>
+
+      <section className="auth-panel">
+        {choices ? (
+          <div className="auth-card">
+            <div className="stack" style={{ gap: 6 }}>
+              <h1>Choose a restaurant</h1>
+              <p className="muted">This account belongs to more than one.</p>
+            </div>
+
+            {error ? (
+              <div className="alert alert-danger" role="alert">
+                <AlertIcon />
+                <div>{error}</div>
+              </div>
+            ) : null}
+
+            <div className="stack" style={{ gap: 10 }}>
+              {choices.map((organization) => (
+                <button
+                  key={organization.id}
+                  type="button"
+                  className="btn btn-lg org-choice"
+                  disabled={submitting}
+                  onClick={(event) => void submit(event, organization.slug)}
+                >
+                  <span>{organization.name}</span>
+                  <span className="faint sm">{organization.type}</span>
+                </button>
+              ))}
+            </div>
+
+            <button type="button" className="btn btn-ghost" onClick={() => setChoices(null)}>
+              Back
+            </button>
+          </div>
+        ) : (
+          <form className="auth-card" onSubmit={(event) => void submit(event)}>
+            <div className="stack" style={{ gap: 6 }}>
+              <h1>Sign in</h1>
+              <p className="muted">Use the email your restaurant set you up with.</p>
+            </div>
+
+            {error ? (
+              <div className="alert alert-danger" role="alert">
+                <AlertIcon />
+                <div>
+                  <span className="alert-title">{error}</span>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="field">
+              <label className="field-label" htmlFor="email">
+                Email
+              </label>
+              <input
+                id="email"
+                className="input"
+                name="email"
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                {...(fieldErrors.email ? { 'aria-invalid': true } : {})}
+              />
+              {fieldErrors.email ? (
+                <p className="field-error">
+                  <AlertIcon className="icon-sm" />
+                  {fieldErrors.email}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor="password">
+                Password
+              </label>
+              <input
+                id="password"
+                className="input"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                {...(fieldErrors.password ? { 'aria-invalid': true } : {})}
+              />
+              {fieldErrors.password ? (
+                <p className="field-error">
+                  <AlertIcon className="icon-sm" />
+                  {fieldErrors.password}
+                </p>
+              ) : null}
+            </div>
+
+            <button type="submit" className="btn btn-primary btn-lg" disabled={submitting}>
+              {submitting ? 'Signing in…' : 'Sign in'}
+            </button>
+          </form>
+        )}
+      </section>
+    </div>
   );
 }

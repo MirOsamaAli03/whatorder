@@ -64,6 +64,37 @@ export class AuthService {
     private readonly audit: AuditService,
   ) {}
 
+  /**
+   * Who the caller is, for `GET /auth/me`.
+   *
+   * The token's claims answer what the caller may *do*; they deliberately carry
+   * no name, because a JWT is sent on every request and a name is not needed to
+   * authorise one. But the dashboard does need it — a sidebar that greets
+   * nobody and names no restaurant is the generic admin panel the redesign set
+   * out to replace — so it is read here, on a tenant-scoped connection, rather
+   * than being baked into the token.
+   */
+  async identity(auth: AuthContext): Promise<{
+    name: string;
+    email: string;
+    organization: { id: string; name: string; slug: string; type: string };
+  }> {
+    return this.prisma.forTenant(auth.tenantId, async (tx) => {
+      const [user, organization] = await Promise.all([
+        tx.user.findUniqueOrThrow({
+          where: { id: auth.userId },
+          select: { name: true, email: true },
+        }),
+        tx.organization.findUniqueOrThrow({
+          where: { id: auth.tenantId },
+          select: { id: true, name: true, slug: true, type: true },
+        }),
+      ]);
+
+      return { name: user.name, email: user.email, organization };
+    });
+  }
+
   async login(input: LoginInput, meta: RequestMeta): Promise<LoginResult | OrganizationChoice> {
     const email = input.email.trim().toLowerCase();
 
