@@ -81,6 +81,8 @@ export interface MenuItem {
 export interface MenuCategory {
   id: string;
   name: string;
+  /** Translations, keyed by language. `UR` is the Urdu name. Already sent by the API. */
+  nameLocalized: Record<string, string>;
   description: string | null;
   sortOrder: number;
   isActive: boolean;

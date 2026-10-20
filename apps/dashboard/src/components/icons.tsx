@@ -131,3 +131,76 @@ export function ChevronDownIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/* ---------------------------------------------------------------------------
+ * Food icons.
+ *
+ * A menu with no photographs would otherwise be a wall of text, and image
+ * upload does not exist yet (backlog B-2). A tinted tile with a shape is not a
+ * photograph, but it gives the eye something to land on and tells one category
+ * from another at a glance — and unlike a photograph it costs no upload, no
+ * storage and no moderation.
+ * ------------------------------------------------------------------------- */
+
+/** Skewers. */
+export function SkewerIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="m3 21 18-18" />
+      <circle cx="9" cy="15" r="2.2" />
+      <circle cx="13" cy="11" r="2.2" />
+      <circle cx="17" cy="7" r="2.2" />
+    </Svg>
+  );
+}
+
+/** A karahi, handles and all. */
+export function KarahiIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3 11h18a9 6 0 0 1-18 0z" />
+      <path d="M1 11h2M21 11h2M9 7c0-1 1-1.5 1-3M14 7c0-1 1-1.5 1-3" />
+    </Svg>
+  );
+}
+
+/** A bowl of rice. */
+export function RiceIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3 11h18a9 8 0 0 1-18 0z" />
+      <path d="M7 8a5 3 0 0 1 10 0" />
+    </Svg>
+  );
+}
+
+/** A slice. */
+export function PizzaIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M12 3 3 19c6 3 12 3 18 0z" />
+      <circle cx="11" cy="12" r="1.3" />
+      <circle cx="14" cy="16" r="1.3" />
+    </Svg>
+  );
+}
+
+/** A cup. */
+export function DrinkIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M5 4h14l-2 16H7z" />
+      <path d="M5 9h14" />
+    </Svg>
+  );
+}
+
+/** A plate and cover — the fallback for a category we cannot guess. */
+export function DishIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 12h16a8 8 0 0 0-16 0z" />
+      <path d="M2 16h20M12 4v0" />
+    </Svg>
+  );
+}
