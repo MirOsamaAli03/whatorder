@@ -1,16 +1,13 @@
 'use client';
 
 import { Permission } from '@restaurant-os/types';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertIcon, CheckIcon, ConversationsIcon } from '@/components/icons';
 import { ApiError, api } from '@/lib/api-client';
 import { useBranches } from '@/lib/branch';
 import { formatDateTime } from '@/lib/format';
 import { useSession } from '@/lib/session';
-import type {
-  NotificationPreference,
-  WhatsAppAccount,
-  WhatsAppTemplate,
-} from '@/lib/types';
+import type { NotificationPreference, WhatsAppAccount, WhatsAppTemplate } from '@/lib/types';
 
 /**
  * Notification and WhatsApp settings.
@@ -28,12 +25,35 @@ import type {
  */
 
 const TEMPLATE_STATUS_CLASS: Record<string, string> = {
-  APPROVED: 'pill pill-ok',
-  REJECTED: 'pill pill-danger',
-  PAUSED: 'pill pill-danger',
-  DISABLED: 'pill pill-danger',
-  PENDING: 'pill pill-warn',
+  APPROVED: 'pill pill-ready',
+  REJECTED: 'pill pill-cancelled',
+  PAUSED: 'pill pill-cancelled',
+  DISABLED: 'pill pill-cancelled',
+  PENDING: 'pill pill-warning',
   DRAFT: 'pill',
+};
+
+/**
+ * Channels, in the order the grid shows them, named as a person would.
+ *
+ * The old screen printed the database's own values — `whatsapp`, `sms`,
+ * `push`, `dashboard` — in lower case, which is the kind of detail that tells
+ * a restaurant owner this software was not finished for them.
+ */
+const CHANNELS: Array<{ key: string; label: string }> = [
+  { key: 'WHATSAPP', label: 'WhatsApp' },
+  { key: 'SMS', label: 'Text message' },
+  { key: 'EMAIL', label: 'Email' },
+  { key: 'PUSH', label: 'Phone alert' },
+  { key: 'DASHBOARD', label: 'This dashboard' },
+];
+
+/** Who can be told, and what that means. */
+const RECIPIENTS: Record<string, { name: string; description: string }> = {
+  CUSTOMER: { name: 'The customer', description: 'Order confirmed, being cooked, on the way' },
+  STAFF: { name: 'Your team', description: 'New orders, and anything nobody has noticed' },
+  MANAGER: { name: 'Managers', description: 'Escalations when an order is left waiting' },
+  OWNER: { name: 'You', description: 'The last rung, when nobody else has answered' },
 };
 
 export default function SettingsPage() {
@@ -47,6 +67,7 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
 
   const [form, setForm] = useState({
     phoneNumberId: '',
@@ -81,7 +102,7 @@ export default function SettingsPage() {
     void load();
   }, [load]);
 
-  async function togglePreference(preference: NotificationPreference) {
+  async function togglePreference(recipientType: string, channel: string, enabled: boolean) {
     setBusy(true);
     setNotice(null);
 
@@ -89,15 +110,7 @@ export default function SettingsPage() {
       setPreferences(
         await api<NotificationPreference[]>('/notifications/preferences', {
           method: 'PUT',
-          body: {
-            preferences: [
-              {
-                recipientType: preference.recipientType,
-                channel: preference.channel,
-                enabled: !preference.enabled,
-              },
-            ],
-          },
+          body: { preferences: [{ recipientType, channel, enabled }] },
         }),
       );
       setError(null);
@@ -129,6 +142,7 @@ export default function SettingsPage() {
 
       setForm({ phoneNumberId: '', displayNumber: '', wabaId: '', branchId: '', accessToken: '' });
       setNotice('Number connected.');
+      setConnecting(false);
       setError(null);
       await load();
     } catch (cause) {
@@ -153,252 +167,379 @@ export default function SettingsPage() {
     }
   }
 
-  if (loading) return <p className="muted">Loading…</p>;
+  /** The flat preference list, pivoted into the grid the screen shows. */
+  const grid = useMemo(() => {
+    const recipients = [...new Set(preferences.map((row) => row.recipientType))];
+
+    return recipients.map((recipientType) => ({
+      recipientType,
+      ...(RECIPIENTS[recipientType] ?? {
+        name: recipientType.toLowerCase(),
+        description: '',
+      }),
+      cells: CHANNELS.map((channel) => ({
+        channel: channel.key,
+        label: channel.label,
+        // Absent means the channel is not offered to that recipient at all —
+        // a customer has no dashboard to be notified in. A dash says so,
+        // rather than an unticked box that looks like a setting.
+        preference: preferences.find(
+          (row) => row.recipientType === recipientType && row.channel === channel.key,
+        ),
+      })),
+    }));
+  }, [preferences]);
+
+  if (loading) {
+    return (
+      <div className="page-head">
+        <div className="page-title">
+          <h1>Settings</h1>
+          <p className="page-sub">Loading…</p>
+        </div>
+      </div>
+    );
+  }
 
   const rejected = templates.filter(
     (template) => template.status === 'REJECTED' || template.status === 'PAUSED',
   );
-  const unapproved = templates.filter((template) => template.status !== 'APPROVED');
 
   return (
-    <div className="page">
-      <header className="page-head">
-        <div>
+    <>
+      <div className="page-head">
+        <div className="page-title">
           <h1>Settings</h1>
-          <p className="muted">How your customers and your team are told about orders.</p>
+          <p className="page-sub">
+            {session.user?.organization.name} · applies to every branch · changes save as you make
+            them
+          </p>
         </div>
-      </header>
+      </div>
 
-      {error ? <p className="error" role="status">{error}</p> : null}
-      {notice ? <p className="notice" role="status">{notice}</p> : null}
-
-      {/*
-        Surfaced at the top rather than buried in the table: a rejected template
-        is the single likeliest reason a restaurant's customers stop hearing
-        from them, and it fails silently everywhere else.
-      */}
-      {rejected.length > 0 ? (
-        <p className="error" role="status">
-          {rejected.length} message {rejected.length === 1 ? 'template has' : 'templates have'} been
-          rejected or paused by WhatsApp. Until they are approved, customers whose last message was
-          over 24 hours ago will not receive those updates.
-        </p>
+      {error ? (
+        <div className="alert alert-danger" role="alert">
+          <AlertIcon />
+          <div>{error}</div>
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="alert alert-success" role="status">
+          <div>{notice}</div>
+        </div>
       ) : null}
 
-      <section className="card">
-        <h2>WhatsApp numbers</h2>
+      {rejected.length > 0 ? (
+        <div className="alert alert-danger" role="alert">
+          <AlertIcon />
+          <div>
+            <span className="alert-title">
+              {rejected.length} template{rejected.length === 1 ? '' : 's'} not usable.
+            </span>{' '}
+            Order updates cannot reach a customer who has been quiet for 24 hours until Meta
+            approves them.
+          </div>
+        </div>
+      ) : null}
 
-        {accounts.length === 0 ? (
-          <p className="muted">
-            No number is connected yet, so nothing can be sent or received over WhatsApp. See the
-            onboarding guide before moving a number that is currently in the WhatsApp Business app.
-          </p>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Number</th>
-                <th>Branch</th>
-                <th>Provider</th>
-                <th>Credentials</th>
-                <th>Status</th>
-                {canManage ? <th /> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {accounts.map((account) => (
-                <tr key={account.id}>
-                  <td>
-                    {account.displayNumber}
-                    <br />
-                    <small className="muted">{account.phoneNumberId}</small>
-                  </td>
-                  <td>
-                    {branches.find((branch) => branch.id === account.branchId)?.name ??
-                      'All branches'}
-                  </td>
-                  <td>{account.provider}</td>
-                  <td>
-                    {/* Never the value: a settings page showing a provider
-                        access token is one screenshot away from leaking it. */}
-                    {account.hasCredentials ? 'Set' : <span className="muted">Not set</span>}
-                  </td>
-                  <td>
-                    <span className={account.isActive ? 'pill pill-ok' : 'pill'}>
-                      {account.isActive ? 'active' : 'inactive'}
+      <div className="set">
+        <section className="set-section" aria-labelledby="settings-whatsapp">
+          <div className="set-intro">
+            <h2 id="settings-whatsapp">WhatsApp number</h2>
+            <p>
+              The number customers message to order. Replies from Conversations are sent from it
+              too.
+            </p>
+          </div>
+
+          <div className="card card-pad stack" style={{ gap: 16 }}>
+            {accounts.length === 0 ? (
+              <>
+                <div className="alert alert-warning" role="status">
+                  <AlertIcon />
+                  <div>
+                    <span className="alert-title">No number connected.</span> Customers cannot
+                    order until you connect one.
+                  </div>
+                </div>
+
+                <div className="steps" style={{ maxWidth: 'none' }}>
+                  <div className="step">
+                    <span className="step-n">1</span>
+                    <div className="stack">
+                      <span className="step-t">Have the number ready</span>
+                      <span className="step-d">A WhatsApp Business number your shop owns.</span>
+                    </div>
+                  </div>
+                  <div className="step">
+                    <span className="step-n">2</span>
+                    <div className="stack">
+                      <span className="step-t">Verify with a code</span>
+                      <span className="step-d">Sent to that phone by SMS or call.</span>
+                    </div>
+                  </div>
+                  <div className="step">
+                    <span className="step-n">3</span>
+                    <div className="stack">
+                      <span className="step-t">Start taking orders</span>
+                      <span className="step-d">The bot answers using your menu.</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              accounts.map((account) => (
+                <div key={account.id} className="wa-status">
+                  <span className="cat-tile t-mint" aria-hidden="true">
+                    <ConversationsIcon />
+                  </span>
+                  <div className="stack" style={{ minWidth: 0 }}>
+                    <span className="wa-num">{account.displayNumber}</span>
+                    <span className="sm muted">
+                      {account.branchId
+                        ? `Used by ${branches.find((b) => b.id === account.branchId)?.name ?? 'one branch'}`
+                        : 'Used by every branch'}
+                      {account.hasCredentials ? '' : ' · no access token stored'}
                     </span>
-                  </td>
+                  </div>
+                  <span className={account.isActive ? 'pill pill-ready' : 'pill pill-outline'}>
+                    {account.isActive ? 'Connected' : 'Paused'}
+                  </span>
                   {canManage ? (
-                    <td>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={busy}
-                        onClick={() => void setActive(account, !account.isActive)}
-                      >
-                        {account.isActive ? 'Deactivate' : 'Activate'}
-                      </button>
-                    </td>
+                    <button
+                      type="button"
+                      className={account.isActive ? 'btn btn-danger' : 'btn'}
+                      disabled={busy}
+                      onClick={() => void setActive(account, !account.isActive)}
+                    >
+                      {account.isActive ? 'Disconnect' : 'Reconnect'}
+                    </button>
                   ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+                </div>
+              ))
+            )}
 
-        {canManage ? (
-          <form className="form-grid" onSubmit={connect}>
-            <h3>Connect a number</h3>
+            {canManage && !connecting ? (
+              <div>
+                <button
+                  type="button"
+                  className={accounts.length === 0 ? 'btn btn-primary btn-lg' : 'btn'}
+                  onClick={() => setConnecting(true)}
+                >
+                  {accounts.length === 0 ? 'Connect a WhatsApp number' : 'Connect another number'}
+                </button>
+              </div>
+            ) : null}
 
-            <label>
-              Phone number ID
-              <input
-                value={form.phoneNumberId}
-                onChange={(event) => setForm({ ...form, phoneNumberId: event.target.value })}
-                required
-                placeholder="From your WhatsApp Business account"
-              />
-            </label>
+            {canManage && connecting ? (
+              <form className="stack" style={{ gap: 14 }} onSubmit={connect}>
+                <h3>Connect a number</h3>
 
-            <label>
-              Number
-              <input
-                value={form.displayNumber}
-                onChange={(event) => setForm({ ...form, displayNumber: event.target.value })}
-                required
-                placeholder="03001234567"
-              />
-            </label>
-
-            <label>
-              WhatsApp Business Account ID
-              <input
-                value={form.wabaId}
-                onChange={(event) => setForm({ ...form, wabaId: event.target.value })}
-                placeholder="Optional"
-              />
-            </label>
-
-            <label>
-              Branch
-              <select
-                value={form.branchId}
-                onChange={(event) => setForm({ ...form, branchId: event.target.value })}
-              >
-                <option value="">All branches</option>
-                {branches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              Access token
-              <input
-                type="password"
-                value={form.accessToken}
-                onChange={(event) => setForm({ ...form, accessToken: event.target.value })}
-                placeholder="Stored encrypted; never shown again"
-              />
-            </label>
-
-            <button type="submit" disabled={busy}>
-              Connect
-            </button>
-          </form>
-        ) : null}
-      </section>
-
-      <section className="card">
-        <h2>Message templates</h2>
-        <p className="muted">
-          WhatsApp only allows a pre-approved template once a customer has been quiet for 24 hours.
-          Approval is Meta&apos;s decision and can take a day or be refused.
-          {unapproved.length > 0
-            ? ` ${unapproved.length} of ${templates.length} are not approved yet.`
-            : ''}
-        </p>
-
-        {templates.length === 0 ? (
-          <p className="muted">
-            No templates registered. Order updates will only reach customers who have messaged in
-            the last 24 hours.
-          </p>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Message</th>
-                <th>Language</th>
-                <th>Category</th>
-                <th>Status</th>
-                <th>Approved</th>
-              </tr>
-            </thead>
-            <tbody>
-              {templates.map((template) => (
-                <tr key={template.id}>
-                  <td>
-                    {template.templateKey}
-                    <br />
-                    <small className="muted">{template.providerName}</small>
-                    {template.rejectionReason ? (
-                      <p className="error-inline">{template.rejectionReason}</p>
-                    ) : null}
-                  </td>
-                  <td>{template.language}</td>
-                  <td>{template.category}</td>
-                  <td>
-                    <span className={TEMPLATE_STATUS_CLASS[template.status] ?? 'pill'}>
-                      {template.status.toLowerCase()}
-                    </span>
-                  </td>
-                  <td className="muted">{formatDateTime(template.approvedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Notifications</h2>
-        <p className="muted">
-          Which channels are used, and for whom. A channel with no provider configured is recorded
-          but not delivered.
-        </p>
-
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Recipient</th>
-              <th>Channel</th>
-              <th>Enabled</th>
-            </tr>
-          </thead>
-          <tbody>
-            {preferences.map((preference) => (
-              <tr key={`${preference.recipientType}:${preference.channel}`}>
-                <td>{preference.recipientType.toLowerCase()}</td>
-                <td>{preference.channel.toLowerCase()}</td>
-                <td>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={preference.enabled}
-                      disabled={!canManage || busy}
-                      onChange={() => void togglePreference(preference)}
-                      aria-label={`${preference.channel} for ${preference.recipientType}`}
-                    />
+                <div className="field">
+                  <label className="field-label" htmlFor="phoneNumberId">
+                    Phone number ID
                   </label>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-    </div>
+                  <input
+                    id="phoneNumberId"
+                    className="input"
+                    required
+                    placeholder="From your WhatsApp Business account"
+                    value={form.phoneNumberId}
+                    onChange={(event) =>
+                      setForm({ ...form, phoneNumberId: event.target.value })
+                    }
+                  />
+                </div>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="displayNumber">
+                    Number
+                  </label>
+                  <input
+                    id="displayNumber"
+                    className="input"
+                    required
+                    placeholder="03001234567"
+                    value={form.displayNumber}
+                    onChange={(event) =>
+                      setForm({ ...form, displayNumber: event.target.value })
+                    }
+                  />
+                </div>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="wabaId">
+                    WhatsApp Business Account ID
+                  </label>
+                  <input
+                    id="wabaId"
+                    className="input"
+                    placeholder="Optional"
+                    value={form.wabaId}
+                    onChange={(event) => setForm({ ...form, wabaId: event.target.value })}
+                  />
+                </div>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="accountBranch">
+                    Branch
+                  </label>
+                  <div className="select-wrap">
+                    <select
+                      id="accountBranch"
+                      className="select"
+                      value={form.branchId}
+                      onChange={(event) => setForm({ ...form, branchId: event.target.value })}
+                    >
+                      <option value="">All branches</option>
+                      {branches.map((branch) => (
+                        <option key={branch.id} value={branch.id}>
+                          {branch.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="accessToken">
+                    Access token
+                  </label>
+                  <input
+                    id="accessToken"
+                    className="input"
+                    type="password"
+                    placeholder="Stored encrypted; never shown again"
+                    value={form.accessToken}
+                    onChange={(event) => setForm({ ...form, accessToken: event.target.value })}
+                  />
+                </div>
+
+                <div className="row-wrap" style={{ gap: 10 }}>
+                  <button type="submit" className="btn btn-primary" disabled={busy}>
+                    Connect
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setConnecting(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="set-section" aria-labelledby="settings-templates">
+          <div className="set-intro">
+            <h2 id="settings-templates">Message templates</h2>
+            <p>
+              WhatsApp only allows a pre-approved template once a customer has been quiet for 24
+              hours. Approval is Meta&rsquo;s decision and can take a day, or be refused.
+            </p>
+          </div>
+
+          <div className="card" style={{ overflow: 'hidden' }}>
+            {templates.length === 0 ? (
+              <div className="empty" style={{ padding: '36px 24px' }}>
+                <p className="empty-body">
+                  No templates registered. Order updates will only reach customers who have
+                  messaged in the last 24 hours.
+                </p>
+              </div>
+            ) : (
+              templates.map((template) => (
+                <div key={template.id} className="tpl">
+                  <div className="stack" style={{ minWidth: 0, gap: 2 }}>
+                    <span className="tpl-name">{template.templateKey}</span>
+                    <span className="tpl-prev">{template.providerName}</span>
+                    {template.rejectionReason ? (
+                      <span className="field-error">
+                        <AlertIcon className="icon-sm" />
+                        {template.rejectionReason}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className={TEMPLATE_STATUS_CLASS[template.status] ?? 'pill'}>
+                    {template.status.toLowerCase()}
+                  </span>
+                  <span className="sm faint">{formatDateTime(template.approvedAt)}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="set-section" aria-labelledby="settings-notifications">
+          <div className="set-intro">
+            <h2 id="settings-notifications">Who hears about orders, and how</h2>
+            <p>
+              Tick a box to send that person updates on that channel. A dash means the channel
+              cannot reach them. A channel with no provider configured is recorded but not
+              delivered.
+            </p>
+          </div>
+
+          <div className="card" style={{ overflow: 'hidden' }}>
+            <table className="ngrid">
+              <thead>
+                <tr>
+                  <th scope="col" style={{ textAlign: 'left' }}>
+                    Send to
+                  </th>
+                  {CHANNELS.map((channel) => (
+                    <th key={channel.key} scope="col">
+                      {channel.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {grid.map((row) => (
+                  <tr key={row.recipientType}>
+                    <th scope="row">
+                      {row.name}
+                      <span>{row.description}</span>
+                    </th>
+                    {row.cells.map((cell) => (
+                      <td key={cell.channel}>
+                        {cell.preference ? (
+                          <label className="check">
+                            <input
+                              type="checkbox"
+                              checked={cell.preference.enabled}
+                              disabled={busy || !canManage}
+                              onChange={(event) =>
+                                void togglePreference(
+                                  row.recipientType,
+                                  cell.channel,
+                                  event.target.checked,
+                                )
+                              }
+                            />
+                            <span className="check-box" aria-hidden="true">
+                              <CheckIcon />
+                            </span>
+                            <span className="sr-only">
+                              {cell.label} for {row.name}
+                            </span>
+                          </label>
+                        ) : (
+                          <span className="na" aria-label={`${cell.label} cannot reach ${row.name}`}>
+                            —
+                          </span>
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </>
   );
 }

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertIcon,
   BackIcon,
+  CheckIcon,
   ClockIcon,
   ConversationsIcon,
   SendIcon,
@@ -195,7 +196,9 @@ export default function ConversationsPage() {
                 checked={showAll}
                 onChange={(event) => setShowAll(event.target.checked)}
               />
-              <span className="check-box" aria-hidden="true" />
+              <span className="check-box" aria-hidden="true">
+                <CheckIcon />
+              </span>
               <span className="check-label">
                 Show all conversations, including ones the bot finished
               </span>
