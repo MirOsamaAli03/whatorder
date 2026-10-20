@@ -2,20 +2,39 @@
 
 import { KDS_COLUMNS, urgencyFor, type KdsColumn } from '@restaurant-os/domain';
 import { OrderStatus, Permission } from '@restaurant-os/types';
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, api } from '@/lib/api-client';
+import {
+  AlertIcon,
+  ArrowRightIcon,
+  AutoThemeIcon,
+  BellIcon,
+  CheckCircleIcon,
+  ClockIcon,
+  DeliveryIcon,
+  ExitIcon,
+  MoonIcon,
+  PickupIcon,
+  SoundOffIcon,
+  SoundOnIcon,
+  StopwatchIcon,
+  SunIcon,
+  TextSizeIcon,
+  WarningIcon,
+} from '@/components/icons';
 import { useAlertSound } from '@/lib/alert-sound';
-import { BranchPicker, useBranches } from '@/lib/branch';
+import { ApiError, api } from '@/lib/api-client';
+import { useBranches } from '@/lib/branch';
 import { formatElapsed, humanize } from '@/lib/format';
 import { useKdsStream, type StreamHealth } from '@/lib/kds-stream';
 import { useSession } from '@/lib/session';
 import type { KdsCard } from '@/lib/types';
 
 /** The action that moves a card out of each column. */
-const ADVANCE: Record<KdsColumn, { label: string; status: OrderStatus } | null> = {
-  NEW: { label: 'Accept', status: OrderStatus.ACCEPTED },
-  ACCEPTED: { label: 'Start', status: OrderStatus.PREPARING },
-  PREPARING: { label: 'Ready', status: OrderStatus.READY },
+const ADVANCE: Record<KdsColumn, { label: string; status: OrderStatus; to: string } | null> = {
+  NEW: { label: 'Accept', status: OrderStatus.ACCEPTED, to: 'accepted' },
+  ACCEPTED: { label: 'Start cooking', status: OrderStatus.PREPARING, to: 'preparing' },
+  PREPARING: { label: 'Ready', status: OrderStatus.READY, to: 'ready' },
   // READY splits by order type — a delivery is dispatched, everything else is
   // handed over — so the button is chosen per card rather than per column.
   READY: null,
@@ -24,9 +43,47 @@ const ADVANCE: Record<KdsColumn, { label: string; status: OrderStatus } | null> 
 const HEALTH_LABEL: Record<StreamHealth, string> = {
   connecting: 'Connecting…',
   live: 'Live',
-  stale: 'No updates — falling back to polling',
+  stale: 'No updates — polling',
   down: 'Disconnected — reconnecting',
 };
+
+/** Light for a bright kitchen, dark for a dim one, or whatever the tablet says. */
+type Screen = 'light' | 'dark' | 'auto';
+
+const THEME_KEY = 'kds.theme';
+const SCALE_KEY = 'kds.scale';
+
+/**
+ * A setting remembered on the device, not the account.
+ *
+ * The kitchen tablet is shared and never signs out; the office laptop that
+ * occasionally opens this screen wants its own answer. Both reads are wrapped
+ * because a kiosk browser with storage disabled must still render the screen.
+ */
+function useDeviceSetting<T extends string>(key: string, fallback: T): [T, (next: T) => void] {
+  const [value, setValue] = useState<T>(fallback);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(key);
+      if (stored) setValue(stored as T);
+    } catch {
+      // Private window, or storage switched off. The default is fine.
+    }
+  }, [key]);
+
+  return [
+    value,
+    (next: T) => {
+      setValue(next);
+      try {
+        window.localStorage.setItem(key, next);
+      } catch {
+        // Not worth telling a cook about.
+      }
+    },
+  ];
+}
 
 export default function KdsPage() {
   const session = useSession();
@@ -36,6 +93,8 @@ export default function KdsPage() {
 
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [screen, setScreen] = useDeviceSetting<Screen>(THEME_KEY, 'light');
+  const [scale, setScale] = useDeviceSetting<'normal' | 'large'>(SCALE_KEY, 'normal');
 
   const canUpdate = session.can(Permission.ORDERS_UPDATE);
 
@@ -65,6 +124,17 @@ export default function KdsPage() {
     return Math.max(0, Math.floor((Date.now() - new Date(snapshot.serverTime).getTime()) / 1000));
   }, [snapshot, tick]);
 
+  // The wall clock in the header. Rendered only after mount, since the server
+  // and the tablet will not agree and React would call that a hydration error.
+  const [clock, setClock] = useState<string | null>(null);
+  useEffect(() => {
+    const show = () =>
+      setClock(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    show();
+    const timer = setInterval(show, 10_000);
+    return () => clearInterval(timer);
+  }, []);
+
   async function advance(card: KdsCard, status: OrderStatus) {
     setBusy(card.id);
     setActionError(null);
@@ -83,156 +153,293 @@ export default function KdsPage() {
     return <p className="muted">Loading…</p>;
   }
 
+  const counts = KDS_COLUMNS.map((column) => ({
+    column,
+    count: snapshot?.columns[column]?.length ?? 0,
+  }));
+  const nothingOutstanding = counts.every((entry) => entry.count === 0);
+
   return (
-    <div className="kds" style={{ margin: '-24px -28px -48px' }}>
-      <div className="kds-bar">
-        <div className="row">
-          <h1 style={{ fontSize: 18 }}>Kitchen · {snapshot?.branchName ?? selected?.name ?? '—'}</h1>
-          <BranchPicker />
-        </div>
-
-        <div className="row" style={{ gap: 16 }}>
-          <span className="kds-status">
-            <span
-              className={`dot ${
-                health === 'live' ? 'dot-live' : health === 'stale' ? 'dot-stale' : 'dot-down'
-              }`}
-            />
-            {HEALTH_LABEL[health]}
+    <div
+      className="app kds"
+      // `auto` means: inherit the document, which follows the device.
+      {...(screen === 'auto' ? {} : { 'data-theme': screen })}
+      style={{ ['--kds-scale' as string]: scale === 'large' ? 1.25 : 1 }}
+    >
+      <header className="kds-head">
+        <div className="kds-title">
+          <b>Kitchen</b>
+          <span>
+            {session.user?.organization.name} · {snapshot?.branchName ?? selected?.name ?? '—'}
           </span>
+        </div>
 
-          {/*
-            Sound is armed explicitly. Browsers refuse to play audio before a
-            user gesture, so a screen that never asks is a screen with no
-            audible alert — and it would never say so.
-          */}
-          {sound.enabled ? (
-            <span className="kds-status">
-              <span className="dot dot-live" /> Sound on
-            </span>
-          ) : (
-            <button type="button" className="btn btn-sm" onClick={() => void sound.enable()}>
-              {sound.blocked ? 'Sound blocked — retry' : 'Enable sound'}
+        <span className="kds-live hide-phone">
+          <span
+            className={
+              health === 'live'
+                ? 'dot dot-live'
+                : health === 'down'
+                  ? 'dot dot-down'
+                  : 'dot dot-stale'
+            }
+            aria-hidden="true"
+          />
+          {HEALTH_LABEL[health]}
+        </span>
+
+        <div className="kds-clock num" role="timer" aria-label={`Current time ${clock ?? ''}`}>
+          {clock ?? ''}
+        </div>
+
+        <div className="kds-tools">
+          <div className="seg hide-tablet-down" role="group" aria-label="Screen brightness">
+            <button
+              type="button"
+              aria-pressed={screen === 'light'}
+              onClick={() => setScreen('light')}
+            >
+              <SunIcon />
+              Bright kitchen
             </button>
-          )}
+            <button
+              type="button"
+              aria-pressed={screen === 'dark'}
+              onClick={() => setScreen('dark')}
+            >
+              <MoonIcon />
+              Dim kitchen
+            </button>
+            <button
+              type="button"
+              aria-pressed={screen === 'auto'}
+              onClick={() => setScreen('auto')}
+            >
+              <AutoThemeIcon />
+              Follow device
+            </button>
+          </div>
 
-          <button type="button" className="btn btn-sm" onClick={() => void refresh()}>
-            Refresh
+          <button
+            type="button"
+            className="btn show-tablet-down"
+            aria-label={`Screen brightness: switch to ${screen === 'dark' ? 'bright' : 'dim'}`}
+            onClick={() => setScreen(screen === 'dark' ? 'light' : 'dark')}
+          >
+            {screen === 'dark' ? <MoonIcon /> : <SunIcon />}
+            <span className="lbl">Theme</span>
           </button>
-        </div>
-      </div>
 
-      {sound.blocked ? (
-        <div className="banner banner-warn" style={{ margin: 12 }} role="status">
-          This browser is blocking audio, so new orders arrive silently. Press
-          &ldquo;Sound blocked — retry&rdquo; after interacting with the page.
-        </div>
-      ) : null}
+          <button
+            type="button"
+            className="btn"
+            aria-label={sound.enabled ? 'Sound is on. Turn it off' : 'Sound is off. Turn it on'}
+            onClick={() => (sound.enabled ? sound.disable() : void sound.enable())}
+          >
+            {sound.enabled ? <SoundOnIcon /> : <SoundOffIcon />}
+            <span className="lbl">{sound.enabled ? 'Sound on' : 'Sound off'}</span>
+          </button>
 
-      {health === 'stale' ? (
-        <div className="banner banner-warn" style={{ margin: 12 }} role="status">
-          No updates received recently. The screen is still refreshing on a timer, but the live
-          connection may be broken.
+          <button
+            type="button"
+            className="btn"
+            aria-label={`Text size: ${scale}. Change it`}
+            onClick={() => setScale(scale === 'large' ? 'normal' : 'large')}
+          >
+            <TextSizeIcon />
+            <span className="lbl">{scale === 'large' ? 'Large text' : 'Normal text'}</span>
+          </button>
+
+          <Link href="/orders" className="btn" aria-label="Exit the kitchen display">
+            <ExitIcon />
+            <span className="lbl">Exit</span>
+          </Link>
         </div>
-      ) : null}
+      </header>
+
+      {/* Phone only: the four columns become one scroller, so these are how you
+          get to a stage without swiping through the ones before it. */}
+      <nav className="kds-stages" aria-label="Jump to a column">
+        {counts.map(({ column, count }) => (
+          <a
+            key={column}
+            href={`#col-${column.toLowerCase()}`}
+            className={`kds-stage ${column.toLowerCase()}`}
+          >
+            {humanize(column)} <span className="num">{count}</span>
+          </a>
+        ))}
+      </nav>
 
       {error || actionError ? (
-        <div className="banner banner-error" style={{ margin: 12 }} role="alert">
-          {actionError ?? error}
+        <div className="alert alert-danger" role="alert" style={{ margin: 12 }}>
+          <AlertIcon />
+          <div>{actionError ?? error}</div>
         </div>
       ) : null}
 
-      {snapshot && snapshot.unacknowledged > 0 ? (
-        <div className="banner banner-error" style={{ margin: 12 }} role="alert">
-          <strong>
-            {snapshot.unacknowledged} order{snapshot.unacknowledged === 1 ? '' : 's'} not yet
-            accepted
-          </strong>{' '}
-          — past {formatElapsed(snapshot.acknowledgementTimeoutSeconds)}.
+      {nothingOutstanding && snapshot ? (
+        <div className="kds-clear" role="status">
+          <CheckCircleIcon className="icon-lg" />
+          <div className="stack">
+            Kitchen is clear
+            <span>Nothing is waiting. A new order will chime.</span>
+          </div>
         </div>
       ) : null}
 
-      <div className="kds-columns">
+      <main className="kds-board">
         {KDS_COLUMNS.map((column) => {
           const cards = snapshot?.columns[column] ?? [];
+          const key = column.toLowerCase();
 
           return (
-            <section key={column} className="kds-column" aria-label={humanize(column)}>
-              <header className="kds-column-head">
-                <span>{humanize(column)}</span>
-                <span>{cards.length}</span>
-              </header>
+            <section
+              key={column}
+              id={`col-${key}`}
+              className={`kds-col ${key}`}
+              aria-label={`${humanize(column)}, ${cards.length} orders`}
+            >
+              <h2 className="kds-col-head">
+                {humanize(column)} <span className="num">{cards.length}</span>
+              </h2>
 
-              <div className="kds-column-body">
+              <div className="kds-col-body">
                 {cards.length === 0 ? (
-                  <p className="faint" style={{ textAlign: 'center', padding: 16 }}>
-                    Empty
-                  </p>
+                  <div className="kds-empty">
+                    <CheckCircleIcon />
+                    Nothing here
+                    <span>
+                      {column === 'NEW'
+                        ? 'New orders land here with a chime.'
+                        : 'Orders arrive as the stage before finishes.'}
+                    </span>
+                  </div>
                 ) : null}
 
                 {cards.map((card) => {
                   const elapsed = card.elapsedSeconds + driftSeconds;
                   // Re-banded client-side so the colour keeps up with the
                   // ticking timer, using the same thresholds the API sent.
-                  const urgency = snapshot
-                    ? urgencyFor(elapsed, snapshot.urgency)
-                    : card.urgency;
+                  const urgency = snapshot ? urgencyFor(elapsed, snapshot.urgency) : card.urgency;
 
-                  const advanceAction =
+                  const action =
                     column === 'READY'
                       ? card.orderType === 'DELIVERY'
-                        ? { label: 'Dispatch', status: OrderStatus.OUT_FOR_DELIVERY }
-                        : { label: 'Handed over', status: OrderStatus.COMPLETED }
+                        ? {
+                            label: 'Picked up',
+                            status: OrderStatus.OUT_FOR_DELIVERY,
+                            to: 'delivered',
+                          }
+                        : {
+                            label: 'Handed over',
+                            status: OrderStatus.COMPLETED,
+                            to: 'delivered',
+                          }
                       : ADVANCE[column];
+
+                  const word = card.isUnacknowledged
+                    ? 'Not seen'
+                    : urgency === 'CRITICAL'
+                      ? 'Late'
+                      : urgency === 'WARNING'
+                        ? 'Late soon'
+                        : column === 'READY'
+                          ? 'Waiting'
+                          : 'On time';
 
                   return (
                     <article
                       key={card.id}
-                      className={`kds-card urgency-${urgency}${
-                        card.isUnacknowledged ? ' unacknowledged' : ''
+                      className={`kds-card${urgency === 'WARNING' ? ' is-warning' : urgency === 'CRITICAL' ? ' is-critical' : ''}${
+                        card.isUnacknowledged ? ' is-unack' : ''
                       }`}
+                      aria-label={`Order ${card.orderNumber}, ${word}`}
                     >
-                      <div className="kds-card-head">
-                        <span className="kds-order-number">{card.orderNumber}</span>
-                        <span className="kds-timer">{formatElapsed(elapsed)}</span>
+                      <div className="kds-timer">
+                        <span className="t" role="timer">
+                          {formatElapsed(elapsed)}
+                        </span>
+                        <span className="w">
+                          {card.isUnacknowledged ? (
+                            <BellIcon />
+                          ) : urgency === 'CRITICAL' ? (
+                            <WarningIcon />
+                          ) : urgency === 'WARNING' ? (
+                            <StopwatchIcon />
+                          ) : (
+                            <ClockIcon />
+                          )}
+                          {word}
+                        </span>
                       </div>
 
-                      <div className="row" style={{ gap: 6 }}>
-                        <span className="pill">{humanize(card.orderType)}</span>
-                        <span className="pill">{humanize(card.source)}</span>
-                        {card.tableLabel ? (
-                          <span className="pill">Table {card.tableLabel}</span>
+                      <div className="kds-card-body">
+                        <div className="kds-order">
+                          {/*
+                            Only the tail is shown large. Every card on this
+                            screen is from the same branch, so the "CLIFTO-"
+                            prefix is identical on all of them and carries no
+                            information — but it is eleven characters that
+                            forced the number down to a size nobody can read
+                            across a kitchen. The full number stays in the
+                            card's accessible name.
+                          */}
+                          <span className="kds-no">
+                            {card.orderNumber.includes('-') ? (
+                              <>
+                                <span className="kds-no-prefix">
+                                  {card.orderNumber.slice(0, card.orderNumber.lastIndexOf('-') + 1)}
+                                </span>
+                                {card.orderNumber.slice(card.orderNumber.lastIndexOf('-') + 1)}
+                              </>
+                            ) : (
+                              card.orderNumber
+                            )}
+                          </span>
+                          <span className="kds-type">
+                            {card.orderType === 'DELIVERY' ? <DeliveryIcon /> : <PickupIcon />}
+                            {card.tableLabel
+                              ? `Table ${card.tableLabel}`
+                              : humanize(card.orderType)}
+                          </span>
+                        </div>
+
+                        <ul className="kds-items">
+                          {card.items.map((item) => (
+                            <li key={item.id} className="kds-item">
+                              <span className="kds-q">{item.quantity}×</span>
+                              <span className="kds-n">
+                                {item.name}
+                                {item.variantName ? ` · ${item.variantName}` : ''}
+                              </span>
+                              {item.modifiers.length > 0 ? (
+                                <span className="kds-m">{item.modifiers.join(' · ')}</span>
+                              ) : null}
+                              {item.notes ? <span className="kds-m">“{item.notes}”</span> : null}
+                            </li>
+                          ))}
+                        </ul>
+
+                        {card.notes ? (
+                          <div className="kds-note">
+                            <AlertIcon className="icon-sm" />
+                            {card.notes}
+                          </div>
                         ) : null}
-                      </div>
 
-                      <ul className="kds-items">
-                        {card.items.map((item) => (
-                          <li key={item.id}>
-                            <span className="kds-qty">{item.quantity}×</span>
-                            {item.name}
-                            {item.variantName ? ` · ${item.variantName}` : ''}
-                            {item.modifiers.length > 0 ? (
-                              <span className="kds-modifiers">{item.modifiers.join(' · ')}</span>
-                            ) : null}
-                            {item.notes ? <span className="kds-note">“{item.notes}”</span> : null}
-                          </li>
-                        ))}
-                      </ul>
-
-                      {card.notes ? <p className="kds-note">Order note: {card.notes}</p> : null}
-
-                      {canUpdate && advanceAction ? (
-                        <div className="kds-card-foot">
+                        {canUpdate && action ? (
                           <button
                             type="button"
-                            className="btn btn-primary"
+                            className={`kds-act to-${action.to}`}
                             disabled={busy === card.id}
-                            onClick={() => void advance(card, advanceAction.status)}
+                            onClick={() => void advance(card, action.status)}
                           >
-                            {busy === card.id ? 'Working…' : advanceAction.label}
+                            {busy === card.id ? 'Working…' : action.label}
+                            <ArrowRightIcon />
                           </button>
-                        </div>
-                      ) : null}
+                        ) : null}
+                      </div>
                     </article>
                   );
                 })}
@@ -240,7 +447,7 @@ export default function KdsPage() {
             </section>
           );
         })}
-      </div>
+      </main>
     </div>
   );
 }

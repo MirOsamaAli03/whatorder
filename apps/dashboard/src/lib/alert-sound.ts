@@ -47,6 +47,22 @@ export function useAlertSound() {
     }
   }, []);
 
+  /**
+   * Mutes the chime without tearing the audio context down.
+   *
+   * Kept suspended rather than closed, because a browser only lets a context
+   * start inside a user gesture — closing it would mean the next "Sound on"
+   * had to win that permission all over again, and on some browsers it would
+   * not. A kitchen that mutes during a quiet hour must be able to unmute with
+   * one tap.
+   */
+  const disable = useCallback(() => {
+    setEnabled(false);
+    void contextRef.current?.suspend().catch(() => {
+      // Already suspended, or closed by the browser. Either way it is silent.
+    });
+  }, []);
+
   const play = useCallback(() => {
     const context = contextRef.current;
     if (!context || context.state !== 'running') return;
@@ -79,5 +95,5 @@ export function useAlertSound() {
     };
   }, []);
 
-  return { enabled, blocked, enable, play };
+  return { enabled, blocked, enable, disable, play };
 }

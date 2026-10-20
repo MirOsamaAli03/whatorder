@@ -146,6 +146,22 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     );
   }
 
+  /*
+   * The kitchen display gets the whole screen.
+   *
+   * It is bolted to a wall and read from across the room, so a 232px column of
+   * navigation is a fifth of the screen spent on links nobody taps — and a
+   * tap-target beside a button a cook hits with the back of a hand. It keeps
+   * the session guard and the branch context; it just loses the furniture.
+   */
+  if (pathname.startsWith('/kds')) {
+    return (
+      <BranchProvider>
+        {children}
+      </BranchProvider>
+    );
+  }
+
   const visible = NAV.filter((item) => session.can(item.permission));
   const organizationName = session.user.organization.name;
   const personName = session.user.name || session.user.email;

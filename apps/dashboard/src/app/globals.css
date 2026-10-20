@@ -1183,3 +1183,19 @@ a { color: var(--accent-text); text-underline-offset: 3px; }
 @media (max-width: 1023px) {
   .otable td.col-items { display: none; }
 }
+
+/* Order numbers here are longer than the design assumed.
+   It drew "#1044"; ours are "CLIFTO-0001" — the branch slug and a sequence —
+   so at 48px they wrapped onto two lines and pushed the type pill out of line.
+   Kept on one line and allowed to shrink to fit the card instead, which still
+   leaves them the largest thing on it after the timer. */
+.kds-no { white-space: nowrap; }
+/* The branch prefix, set small above the number it belongs to. */
+.kds-no-prefix {
+  display: block;
+  font-size: calc(15px * var(--k));
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--text-2);
+  letter-spacing: .04em;
+}
