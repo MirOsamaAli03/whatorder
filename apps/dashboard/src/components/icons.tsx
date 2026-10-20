@@ -204,3 +204,31 @@ export function DishIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/** A left arrow, for going back from a thread to the list on a phone. */
+export function BackIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M19 12H5M11 18l-6-6 6-6" />
+    </Svg>
+  );
+}
+
+/** A paper plane. Send. */
+export function SendIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M21 3 10.5 13.5M21 3l-7 18-3.5-7.5L3 10z" />
+    </Svg>
+  );
+}
+
+/** A clock, for waiting times and system notes. */
+export function ClockIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </Svg>
+  );
+}

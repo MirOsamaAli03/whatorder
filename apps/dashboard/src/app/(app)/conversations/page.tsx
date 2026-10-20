@@ -2,9 +2,16 @@
 
 import { Permission } from '@restaurant-os/types';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  AlertIcon,
+  BackIcon,
+  ClockIcon,
+  ConversationsIcon,
+  SendIcon,
+} from '@/components/icons';
 import { ApiError, api } from '@/lib/api-client';
 import { BranchPicker, useBranches } from '@/lib/branch';
-import { formatElapsed, formatDateTime } from '@/lib/format';
+import { formatDateTime, formatElapsed } from '@/lib/format';
 import { useSession } from '@/lib/session';
 import type { ConversationSummary, ConversationThread } from '@/lib/types';
 
@@ -24,6 +31,16 @@ import type { ConversationSummary, ConversationThread } from '@/lib/types';
 
 /** Waiting longer than this is called out in red. */
 const URGENT_SECONDS = 300;
+/** And longer than this turns the wait badge amber on the way there. */
+const WARNING_SECONDS = 120;
+
+/** Somebody's initials, for the thread avatar. */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  return ((parts[0]?.charAt(0) ?? '') + (parts.length > 1 ? parts[parts.length - 1]!.charAt(0) : ''))
+    .toUpperCase();
+}
 
 export default function ConversationsPage() {
   const session = useSession();
@@ -127,152 +144,250 @@ export default function ConversationsPage() {
   }
 
   if (branchesLoading || loading) {
-    return <p className="muted">Loading…</p>;
+    return (
+      <div className="page-head">
+        <div className="page-title">
+          <h1>Conversations</h1>
+          <p className="page-sub">Loading…</p>
+        </div>
+      </div>
+    );
   }
 
   const waiting = conversations.filter((row) => row.waitingSeconds !== null);
+  const who = thread?.customer?.name ?? thread?.contactNumber ?? '';
 
   return (
-    <div className="page">
-      <header className="page-head">
-        <div>
+    <>
+      <div className="page-head">
+        <div className="page-title">
           <h1>Conversations</h1>
-          <p className="muted">
+          <p className="page-sub">
             {waiting.length === 0
               ? 'Nobody is waiting for a reply.'
               : `${waiting.length} ${waiting.length === 1 ? 'customer is' : 'customers are'} waiting for a reply.`}
           </p>
         </div>
-        <div className="page-actions">
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={showAll}
-              onChange={(event) => setShowAll(event.target.checked)}
-            />
-            Show all conversations
-          </label>
-          <BranchPicker />
+        <div className="page-tools hide-phone">
+          <BranchPicker id="conversations-branch" />
         </div>
-      </header>
+      </div>
 
-      {error ? <p className="error" role="status">{error}</p> : null}
+      {error ? (
+        <div className="alert alert-danger" role="alert">
+          <AlertIcon />
+          <div>{error}</div>
+        </div>
+      ) : null}
 
-      <div className="inbox">
-        <ul className="inbox-list">
+      {/* On a phone the two panes become one: the list, until a conversation is
+          opened, and then the thread with a back button. */}
+      <div className={`inbox${openId ? ' show-thread' : ''}`}>
+        <section className="inbox-list" aria-label="Customers waiting">
+          <div className="inbox-list-head">
+            <div className="row">
+              <b>Waiting for a person</b>
+              <span className="sm faint">Longest first</span>
+            </div>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={showAll}
+                onChange={(event) => setShowAll(event.target.checked)}
+              />
+              <span className="check-box" aria-hidden="true" />
+              <span className="check-label">
+                Show all conversations, including ones the bot finished
+              </span>
+            </label>
+          </div>
+
           {conversations.length === 0 ? (
-            <li className="muted inbox-empty">
-              {showAll ? 'No conversations yet.' : 'No one is waiting.'}
-            </li>
+            <div className="empty" style={{ padding: '48px 24px' }}>
+              <div
+                className="empty-icon"
+                aria-hidden="true"
+                style={{ background: 'var(--st-ready-soft)', color: 'var(--st-ready-fg)' }}
+              >
+                <ConversationsIcon className="icon-lg" />
+              </div>
+              <h2 className="empty-title" style={{ fontSize: 24, lineHeight: '30px' }}>
+                {showAll ? 'No conversations yet' : 'No one is waiting'}
+              </h2>
+              <p className="empty-body">
+                When a customer asks to speak to a person on WhatsApp, they appear here — longest
+                wait first, with the wait in big numbers.
+              </p>
+            </div>
           ) : null}
 
           {conversations.map((row) => {
-            const urgent = (row.waitingSeconds ?? 0) >= URGENT_SECONDS;
+            const seconds = row.waitingSeconds ?? 0;
+            const waitClass =
+              seconds >= URGENT_SECONDS
+                ? 'wait is-critical'
+                : seconds >= WARNING_SECONDS
+                  ? 'wait is-warning'
+                  : 'wait';
+            const name = row.customerName ?? row.contactNumber;
 
             return (
-              <li key={row.id}>
-                <button
-                  type="button"
-                  className={`inbox-row${openId === row.id ? ' is-open' : ''}`}
-                  onClick={() => setOpenId(row.id)}
-                  aria-current={openId === row.id ? 'true' : undefined}
-                >
-                  <span className="inbox-who">
-                    {row.customerName ?? row.contactNumber}
-                    {row.customerName ? (
-                      <small className="muted"> {row.contactNumber}</small>
-                    ) : null}
+              <button
+                key={row.id}
+                type="button"
+                className="inbox-row"
+                aria-current={openId === row.id ? 'true' : undefined}
+                aria-label={
+                  row.waitingSeconds !== null
+                    ? `${name}, waiting ${formatElapsed(row.waitingSeconds)}`
+                    : name
+                }
+                onClick={() => setOpenId(row.id)}
+              >
+                {/* The wait is the loudest thing on the row, on purpose: an
+                    inbox that does not make waiting visible is a list nobody
+                    triages. */}
+                {row.waitingSeconds !== null ? (
+                  <span className={waitClass}>
+                    <b>{Math.max(1, Math.round(row.waitingSeconds / 60))}</b>
+                    <span>min</span>
                   </span>
+                ) : (
+                  <span className="wait" style={{ background: 'var(--surface-2)' }}>
+                    <b>·</b>
+                    <span>bot</span>
+                  </span>
+                )}
 
-                  <span className="inbox-preview muted">
+                <span className="inbox-who">
+                  <span className="inbox-name">{name}</span>
+                  <span className="inbox-preview">
                     {row.lastMessage?.body?.slice(0, 80) ?? 'No messages yet'}
                   </span>
-
-                  {row.waitingSeconds !== null ? (
-                    <span className={urgent ? 'pill pill-danger' : 'pill pill-warn'}>
-                      waiting {formatElapsed(row.waitingSeconds)}
-                    </span>
-                  ) : (
-                    <span className="pill">{row.state.replace(/_/g, ' ').toLowerCase()}</span>
-                  )}
-                </button>
-              </li>
+                  <span className="inbox-meta">
+                    {row.customerName ? `${row.contactNumber} · ` : ''}
+                    {row.state.replace(/_/g, ' ').toLowerCase()}
+                  </span>
+                </span>
+              </button>
             );
           })}
-        </ul>
+        </section>
 
-        <section className="inbox-thread">
+        <section className="thread" aria-label="Conversation">
           {!thread ? (
-            <p className="muted">Pick a conversation to read it.</p>
+            <div className="empty" style={{ margin: 'auto' }}>
+              <p className="empty-body">
+                Nothing to reply to. The bot is handling every chat right now.
+              </p>
+            </div>
           ) : (
             <>
-              <header className="thread-head">
-                <div>
-                  <strong>{thread.customer?.name ?? thread.contactNumber}</strong>
-                  <p className="muted">
-                    {thread.contactNumber} · last heard from{' '}
-                    {formatDateTime(thread.lastInboundAt)}
-                  </p>
+              <div className="thread-head">
+                <button
+                  type="button"
+                  className="btn btn-icon btn-ghost back-btn"
+                  aria-label="Back to the waiting list"
+                  onClick={() => setOpenId(null)}
+                >
+                  <BackIcon />
+                </button>
+                <span className="avatar" aria-hidden="true">
+                  {initials(who)}
+                </span>
+                <div className="who">
+                  <b>{who}</b>
+                  <span className="sm muted num">
+                    {thread.contactNumber} · last heard from {formatDateTime(thread.lastInboundAt)}
+                  </span>
                 </div>
+                <div className="acts">
+                  {thread.state === 'HUMAN_HANDOFF' && canReply ? (
+                    <button type="button" className="btn" onClick={handBack} disabled={busy}>
+                      Hand back to the bot
+                    </button>
+                  ) : null}
+                </div>
+              </div>
 
-                {thread.state === 'HUMAN_HANDOFF' && canReply ? (
-                  <button type="button" className="secondary" onClick={handBack} disabled={busy}>
-                    Hand back to the bot
-                  </button>
+              <div className="thread-body">
+                {thread.messages.map((message) => {
+                  const inbound = message.direction === 'INBOUND';
+
+                  /*
+                   * The design gives the bot its own dashed bubble, and it
+                   * should have one — staff need to know whether the last
+                   * reply came from a colleague or from the machine. It is not
+                   * rendered here because `whatsapp_messages` does not record
+                   * who sent an outbound message; there is no field to read.
+                   * Inventing the distinction from `templateKey` or `sendMode`
+                   * would be a guess shown as fact, so every outbound message
+                   * looks the same until the column exists.
+                   */
+                  return (
+                    <div key={message.id} className={`msg ${inbound ? 'msg-in' : 'msg-out'}`}>
+                      <div className="bubble">
+                        {message.body ?? <em className="muted">(no text)</em>}
+                      </div>
+                      <span className="msg-meta num">
+                        {formatDateTime(message.occurredAt)}
+                        {!inbound && message.status ? ` · ${message.status.toLowerCase()}` : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+
+                {thread.state === 'HUMAN_HANDOFF' && thread.lastInboundAt ? (
+                  <span className="sys-note" role="status">
+                    <ClockIcon className="icon-sm" />
+                    Asked for a person at {formatDateTime(thread.lastInboundAt)}
+                  </span>
                 ) : null}
-              </header>
 
-              <div className="thread-messages">
-                {thread.messages.map((message) => (
-                  <article
-                    key={message.id}
-                    className={
-                      message.direction === 'INBOUND' ? 'bubble bubble-in' : 'bubble bubble-out'
-                    }
-                  >
-                    <p>{message.body ?? <em className="muted">(no text)</em>}</p>
-                    <footer className="muted">
-                      {formatDateTime(message.occurredAt)}
-                      {message.direction === 'OUTBOUND' && message.status
-                        ? ` · ${message.status}`
-                        : ''}
-                    </footer>
-                  </article>
-                ))}
                 <div ref={bottom} />
               </div>
 
               {canReply ? (
-                <form className="thread-reply" onSubmit={reply}>
-                  <textarea
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    placeholder={
-                      thread.canReply
-                        ? 'Type a reply…'
-                        : 'WhatsApp will not accept a reply until this customer messages again'
-                    }
-                    rows={2}
-                    maxLength={1000}
-                    disabled={!thread.canReply || busy}
-                  />
-                  <button type="submit" disabled={!thread.canReply || busy || !draft.trim()}>
-                    Send
-                  </button>
-                </form>
-              ) : null}
+                <form className="composer" onSubmit={reply}>
+                  <div className="composer-row">
+                    <label htmlFor="reply" className="sr-only">
+                      Reply to {who} on WhatsApp
+                    </label>
+                    <textarea
+                      id="reply"
+                      className="textarea"
+                      value={draft}
+                      onChange={(event) => setDraft(event.target.value)}
+                      placeholder={
+                        thread.canReply
+                          ? `Reply to ${who} on WhatsApp…`
+                          : 'WhatsApp will not accept a reply until this customer messages again'
+                      }
+                      rows={2}
+                      maxLength={1000}
+                      disabled={!thread.canReply || busy}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-lg"
+                      disabled={!thread.canReply || busy || !draft.trim()}
+                    >
+                      <SendIcon />
+                      Send
+                    </button>
+                  </div>
 
-              {!thread.canReply ? (
-                <p className="muted thread-note">
-                  This customer last messaged more than 24 hours ago. WhatsApp only allows a
-                  pre-approved template after that, so they will need to message again before you
-                  can reply here.
-                </p>
+                  <span className="cap faint">
+                    {thread.canReply
+                      ? 'Sent on WhatsApp from your number. The bot stays paused until you hand back.'
+                      : 'This customer last messaged more than 24 hours ago. WhatsApp only allows a pre-approved template after that, so they will need to message again before you can reply here.'}
+                  </span>
+                </form>
               ) : null}
             </>
           )}
         </section>
       </div>
-    </div>
+    </>
   );
 }
