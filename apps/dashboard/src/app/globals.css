@@ -1143,12 +1143,43 @@ a { color: var(--accent-text); text-underline-offset: 3px; }
    sits in the left panel looking like a mistake. */
 .auth-loading { min-height: 100vh; display: grid; place-items: center; padding: var(--sp-6); }
 
-/* Sign out lives in the sidebar foot beside the avatar. Pushed to the end so
-   it does not crowd the name, and hidden on the rail and the bottom bar where
-   there is no room for it — the account menu is the way out there. */
-.sidebar-foot .sign-out { margin-left: auto; flex: none; }
+/* Sign out sits under the account row rather than beside it.
+   Beside it, `margin-left: auto` squeezed the name into an ellipsis — "Chain
+   Owner" rendered as "Chain…" — because the row is only 232px wide and a name
+   should not lose to a button. Hidden on the rail and the bottom bar, where
+   there is no room for either. */
+.sidebar-foot { flex-wrap: wrap; }
+.sidebar-foot .who { flex: 1 1 auto; }
+.sidebar-foot .sign-out { flex: 1 0 100%; justify-content: center; margin-top: var(--sp-2); }
 @media (max-width: 1023px) { .sidebar-foot .sign-out { display: none; } }
 
 /* One row per restaurant when an account belongs to several. The name leads
    and the type trails, so the column of names stays scannable. */
 .org-choice { justify-content: space-between; width: 100%; text-align: left; }
+
+/* The order detail, opened from the order number. The design had no place for
+   it because it did not know the feature existed; it carries the price
+   breakdown and the status history, which is what somebody reaches for when a
+   customer queries a bill. */
+.o-disclose { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; }
+.o-detail-row > td { background: var(--bg); padding: var(--sp-5); }
+.o-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-6); align-items: start; }
+.o-detail h3 { font: 800 var(--fs-caption)/var(--lh-caption) var(--font-ui); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin-bottom: var(--sp-2); }
+.o-detail-list { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); }
+.o-totals { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); margin: 0; }
+.o-totals > div { display: flex; justify-content: space-between; gap: var(--sp-4); }
+.o-totals dd { margin: 0; font-variant-numeric: tabular-nums; }
+.o-totals > div:last-child { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; font-weight: 800; }
+
+/* A fix to the design's own stylesheet, kept here so section 10 stays as
+   delivered.
+
+   At =<599px `.otable td { display: block }` turns every cell into a block, and
+   it both outranks `.col-items { display: none }` (0,1,1 against 0,1,0) and
+   comes later in the file. The items column therefore reappeared on phones —
+   and because the phone layout assigns grid areas by class and `col-items` has
+   none, it landed outside the named areas and printed the dishes a second time
+   under the price. */
+@media (max-width: 1023px) {
+  .otable td.col-items { display: none; }
+}

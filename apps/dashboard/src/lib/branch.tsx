@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { ChevronDownIcon } from '@/components/icons';
 import { api } from './api-client';
 import type { Branch } from './types';
 
@@ -98,27 +99,46 @@ export function useBranches(): BranchState {
 }
 
 /** A branch picker, hidden when there is only one to choose from. */
-export function BranchPicker() {
+/**
+ * The branch switcher, label and all.
+ *
+ * It owns its own label rather than letting each page supply one. That is what
+ * went wrong before: pages put a bare "Branch" next to the control in a flex
+ * row, and on three screens it ended up visually clipped against the dropdown.
+ * Keeping the two together means the label is always attached to the thing it
+ * names, and there is never a `for=` pointing at a control that was not
+ * rendered.
+ *
+ * A restaurant with one branch gets a plain pill. Asking somebody to choose
+ * between one option reads as a form that does not know what it is doing.
+ */
+export function BranchPicker({ id = 'branch-picker' }: { id?: string }) {
   const { branches, selected, selectBranch } = useBranches();
 
   if (branches.length <= 1) {
-    return selected ? <span className="pill">{selected.name}</span> : null;
+    return selected ? <span className="pill pill-outline">{selected.name}</span> : null;
   }
 
   return (
-    <label style={{ margin: 0 }}>
-      <span className="faint">Branch</span>
-      <select
-        value={selected?.id ?? ''}
-        onChange={(event) => selectBranch(event.target.value)}
-        style={{ width: 'auto', minWidth: 160 }}
-      >
-        {branches.map((branch) => (
-          <option key={branch.id} value={branch.id}>
-            {branch.name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className="field">
+      <label className="field-label" htmlFor={id}>
+        Branch
+      </label>
+      <div className="select-wrap">
+        <select
+          id={id}
+          className="select"
+          value={selected?.id ?? ''}
+          onChange={(event) => selectBranch(event.target.value)}
+        >
+          {branches.map((branch) => (
+            <option key={branch.id} value={branch.id}>
+              {branch.name}
+            </option>
+          ))}
+        </select>
+        <ChevronDownIcon />
+      </div>
+    </div>
   );
 }
