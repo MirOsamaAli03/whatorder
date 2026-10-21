@@ -1199,3 +1199,26 @@ a { color: var(--accent-text); text-underline-offset: 3px; }
   color: var(--text-2);
   letter-spacing: .04em;
 }
+
+/* The structure editor's left panes are 248px and 284px, and the design drew
+   them with a demo menu of short names. Real ones are longer, so the controls
+   give up width before the name does: the reorder arrows and the overflow
+   trigger shrink, and the name keeps what is left. Still above the 44px tap
+   target on touch, where the panes are full width anyway. */
+@media (min-width: 1024px) {
+  .sort-row .updown .btn,
+  .sort-row .menu-wrap .btn,
+  .dish-mini .menu-wrap .btn { --h: 30px; }
+  .sort-row { gap: 2px; }
+}
+
+/* No drag handles, because dragging is not implemented.
+   The design's rows open with a grip, which promises drag-to-reorder; these
+   rows reorder with the arrow buttons instead. A grip that does nothing is a
+   worse lie than no grip, and dropping it gives the 32px back to the name,
+   which is what was being truncated. Reordering by arrows also works on a
+   touch screen and from a keyboard, which dragging would not without
+   considerably more code. */
+.sort-row { grid-template-columns: minmax(0, 1fr) auto auto; padding-left: 12px; }
+.dish-mini { grid-template-columns: 44px minmax(0, 1fr) auto; padding-left: 12px; }
+.vrow { grid-template-columns: minmax(0, 1fr) 130px 104px 44px; padding-left: 8px; }

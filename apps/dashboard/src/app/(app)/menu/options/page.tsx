@@ -564,7 +564,6 @@ export default function OptionGroupsPage() {
 
                 <div className="vtable">
                   <div className="vrow head">
-                    <span />
                     <span>Name</span>
                     <span>Price change</span>
                     <span>Available</span>
@@ -573,9 +572,6 @@ export default function OptionGroupsPage() {
 
                   {options.map((option, index) => (
                     <div key={option.id} className="vrow">
-                      <span className="grip" aria-hidden="true">
-                        ⋮⋮
-                      </span>
                       <input
                         className="input"
                         aria-label={`Name of option ${index + 1}`}

@@ -8,7 +8,6 @@ import { OverflowMenu } from '@/components/overflow-menu';
 import { ApiError, api } from '@/lib/api-client';
 import { useBranches } from '@/lib/branch';
 import { categoryStyle } from '@/lib/category-style';
-import { formatMoney } from '@/lib/format';
 import { useSession } from '@/lib/session';
 import type { Menu, MenuCategory, MenuItem, MenuVariant } from '@/lib/types';
 
@@ -341,10 +340,6 @@ export default function MenuStructurePage() {
               className="sort-row"
               aria-current={candidate.id === categoryId ? 'true' : undefined}
             >
-              <span className="grip" aria-hidden="true">
-                ⋮⋮
-              </span>
-
               <button
                 type="button"
                 className="sort-name"
@@ -424,16 +419,20 @@ export default function MenuStructurePage() {
 
           {(category?.items ?? []).map((item) => {
             const { Icon, tint } = categoryStyle(category?.name ?? '', 0);
-            const priceLabel =
+            // Rounded, and without the decimals, because this column shares a
+            // 284px pane with the dish's name — "Rs 2,400.00+" squeezed
+            // "BBQ Platter" down to "BBQ …". The exact figure is one click
+            // away in the editor, and on the Availability tab in full.
+            const lowest =
               item.variants.length > 0
-                ? `${formatMoney(
-                    item.variants.reduce(
-                      (lowest, variant) => (Number(variant.price) < Number(lowest) ? variant.price : lowest),
-                      item.variants[0]!.price,
-                    ),
-                    item.currency,
-                  )}+`
-                : formatMoney(item.basePrice, item.currency);
+                ? item.variants.reduce(
+                    (least, variant) => (Number(variant.price) < Number(least) ? variant.price : least),
+                    item.variants[0]!.price,
+                  )
+                : item.basePrice;
+            const priceLabel = `Rs ${Math.round(Number(lowest)).toLocaleString('en-PK')}${
+              item.variants.length > 1 ? '+' : ''
+            }`;
 
             return (
               <button
@@ -444,9 +443,6 @@ export default function MenuStructurePage() {
                 onClick={() => openDish(item)}
                 style={{ width: '100%', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer' }}
               >
-                <span className="grip" aria-hidden="true">
-                  ⋮⋮
-                </span>
                 <span className={`dish-img ${tint}`} aria-hidden="true">
                   <Icon />
                 </span>
@@ -570,7 +566,6 @@ export default function MenuStructurePage() {
 
                 <div className="vtable">
                   <div className="vrow head">
-                    <span />
                     <span>Size name</span>
                     <span>Price</span>
                     <span>Default</span>
@@ -579,9 +574,6 @@ export default function MenuStructurePage() {
 
                   {sizes.map((size, index) => (
                     <div key={size.key} className="vrow">
-                      <span className="grip" aria-hidden="true">
-                        ⋮⋮
-                      </span>
                       <input
                         className="input"
                         aria-label={`Name of size ${index + 1}`}
@@ -626,6 +618,7 @@ export default function MenuStructurePage() {
                             setDirty(true);
                           }}
                         />
+                        <span className="radio-dot" aria-hidden="true" />
                         <span className="sr-only">
                           Make {size.name || `size ${index + 1}`} the default
                         </span>
