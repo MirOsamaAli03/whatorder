@@ -3,6 +3,7 @@
 import { Permission } from '@restaurant-os/types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertIcon, CheckIcon, MenuIcon } from '@/components/icons';
+import { MenuOnboarding } from '@/components/menu-onboarding';
 import { MenuTabs } from '@/components/menu-tabs';
 import { OverflowMenu } from '@/components/overflow-menu';
 import { ApiError, api } from '@/lib/api-client';
@@ -329,6 +330,7 @@ export default function MenuStructurePage() {
   }
 
   const dishCount = categories.reduce((total, c) => total + c.items.length, 0);
+  const onboarding = categories.length === 0 && canCreate;
 
   return (
     <>
@@ -344,6 +346,10 @@ export default function MenuStructurePage() {
 
       <MenuTabs />
 
+      {/* An empty menu is this product's onboarding: nothing works until the
+          menu exists, and building one from nothing is its longest job. */}
+      {onboarding ? <MenuOnboarding onDone={() => void load()} /> : null}
+
       {error ? (
         <div className="alert alert-danger" role="alert">
           <AlertIcon />
@@ -351,6 +357,11 @@ export default function MenuStructurePage() {
         </div>
       ) : null}
 
+      {/* Rendered away entirely while the wizard is up, rather than hidden:
+          `hidden` sets display:none at user-agent weight, which loses to
+          `.ed { display: grid }`. Three empty panes under the wizard was the
+          result. */}
+      {onboarding ? null : (
       <div className="ed">
         <section className="ed-pane" aria-label="Categories">
           <div className="pane-head">
@@ -830,6 +841,7 @@ export default function MenuStructurePage() {
           )}
         </section>
       </div>
+      )}
     </>
   );
 }

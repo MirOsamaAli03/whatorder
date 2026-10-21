@@ -17,6 +17,7 @@ import {
   type ItemChoices,
   addedToCartMessage,
   blockedCustomerMessage,
+  browseCategoriesMessage,
   askAddressMessage,
   askOrderTypeMessage,
   askQuantityMessage,
@@ -337,7 +338,7 @@ export class ConversationService {
         messages: [
           listMessage({
             to: turn.contactNumber,
-            body: 'Here is what we have. Pick a section to see the dishes.',
+            body: browseCategoriesMessage(),
             buttonLabel: 'View menu',
             sections: [
               {

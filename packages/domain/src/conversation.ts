@@ -532,6 +532,18 @@ export function greetingMessage(restaurantName: string, customerName?: string | 
   );
 }
 
+/**
+ * The menu's top level: pick a section.
+ *
+ * Here rather than in the conversation service because the dashboard shows a
+ * preview of it while a restaurant is building its menu, and a preview that
+ * restates the wording instead of using it is a preview that will quietly stop
+ * being true.
+ */
+export function browseCategoriesMessage(): string {
+  return 'Here is what we have. Pick a section to see the dishes.';
+}
+
 export function emptyMenuMessage(restaurantName: string): string {
   return `${restaurantName} has no items on the menu right now. Please try again a little later.`;
 }

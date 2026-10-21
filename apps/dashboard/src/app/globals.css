@@ -1222,3 +1222,10 @@ a { color: var(--accent-text); text-underline-offset: 3px; }
 .sort-row { grid-template-columns: minmax(0, 1fr) auto auto; padding-left: 12px; }
 .dish-mini { grid-template-columns: 44px minmax(0, 1fr) auto; padding-left: 12px; }
 .vrow { grid-template-columns: minmax(0, 1fr) 130px 104px 44px; padding-left: 8px; }
+
+/* The onboarding's category chips wrap instead of scrolling.
+   `.chips` is a horizontal scroller, which is right for a filter bar where the
+   first few matter most and the rest are one swipe away. These are a menu of
+   choices to tick — one of them being off-screen means it is never picked —
+   so here they wrap and all nine stay visible. */
+.onb .chips { flex-wrap: wrap; overflow: visible; }
