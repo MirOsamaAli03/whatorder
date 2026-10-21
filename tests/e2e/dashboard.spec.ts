@@ -14,7 +14,10 @@ const KITCHEN = { email: 'dha.kitchen@kababjees.test', password: 'RestaurantOS12
 
 /** The app's own error banner, not Next's route announcer, which is also role=alert. */
 function errorBanner(page: Page) {
-  return page.locator('.banner-error');
+  // By role, but scoped to our own alert: Next renders an empty
+  // `role="alert"` route announcer on every page, so an unscoped query is a
+  // strict-mode violation rather than a failure anybody can read.
+  return page.locator('.alert[role="alert"]').first();
 }
 
 async function signIn(page: Page, who: { email: string; password: string }) {
@@ -212,31 +215,36 @@ test.describe('menu management', () => {
      * starting state fails for a reason unrelated to what it is checking, and
      * sends you hunting through the wrong code.
      */
+    // Availability is a switch now rather than a pair of buttons, so this
+    // asks the control what state it is in instead of matching a pill's text.
+    // The switch keeps its real <input> at opacity 0 behind the drawn track —
+    // the standard accessible pattern, and still keyboard-focusable. A person
+    // clicks the label, so this does too; the input is only read for state.
+    function saleRow(dish: string) {
+      return page.locator('.dish', { hasText: dish }).first();
+    }
+    const state = (dish: string) => saleRow(dish).getByRole('switch');
+    const press = (dish: string) => saleRow(dish).locator('.switch').click();
+
     async function makeAvailableAt(branch: string) {
       await selectBranch(page, branch);
-      const row = page.locator('.item-row', { hasText: 'Chicken Tikka' }).first();
-      await expect(row).toBeVisible();
+      await expect(saleRow('Chicken Tikka')).toBeVisible();
 
-      const button = row.getByRole('button', { name: 'Available' });
-      if (await button.isVisible().catch(() => false)) {
-        await button.click();
-      }
-      await expect(row.locator('.pill', { hasText: 'Available' })).toBeVisible();
+      if (!(await state('Chicken Tikka').isChecked())) await press('Chicken Tikka');
+      await expect(state('Chicken Tikka')).toBeChecked();
     }
 
     await makeAvailableAt('Clifton');
     await makeAvailableAt('DHA');
 
     // Now the actual check: sold out at DHA...
-    const dhaRow = page.locator('.item-row', { hasText: 'Chicken Tikka' }).first();
-    await dhaRow.getByRole('button', { name: 'Sold out' }).click();
-    await expect(dhaRow.locator('.pill', { hasText: 'Sold out' })).toBeVisible();
+    await press('Chicken Tikka');
+    await expect(state('Chicken Tikka')).not.toBeChecked();
 
     // ...and unaffected at Clifton. Spec §86: a branch restricts its own menu,
     // it does not speak for the chain.
     await selectBranch(page, 'Clifton');
-    const cliftonRow = page.locator('.item-row', { hasText: 'Chicken Tikka' }).first();
-    await expect(cliftonRow.locator('.pill', { hasText: 'Available' })).toBeVisible();
+    await expect(state('Chicken Tikka')).toBeChecked();
 
     // Leave the data as it was found.
     await makeAvailableAt('DHA');
@@ -249,16 +257,16 @@ test.describe('menu management', () => {
 
     // The seed prices the platter higher in Lahore, so both figures appear —
     // showing only one is how a manager edits the wrong number.
-    const row = page.locator('.item-row', { hasText: 'BBQ Platter' }).first();
+    const row = page.locator('.dish', { hasText: 'BBQ Platter' }).first();
     await expect(row).toContainText('Rs 2,650.00');
-    await expect(row).toContainText('chain Rs 2,400.00');
+    await expect(row).toContainText('Chain: Rs 2,400.00');
   });
 
   test('creates an item and rejects a malformed price', async ({ page }) => {
     await signIn(page, OWNER);
     await page.getByRole('link', { name: 'Menu' }).click();
     await selectBranch(page, 'DHA');
-    await page.getByRole('button', { name: 'New item' }).click();
+    await page.getByRole('button', { name: 'New dish' }).click();
 
     const unique = `Browser Test Dish ${Date.now()}`;
     await page.getByLabel('Name', { exact: true }).fill(unique);
@@ -273,7 +281,7 @@ test.describe('menu management', () => {
     await page.getByRole('button', { name: 'Create item' }).click();
 
     await expect(page.getByText(unique)).toBeVisible();
-    await expect(page.locator('.item-row', { hasText: unique })).toContainText('Rs 1,250.00');
+    await expect(page.locator('.dish', { hasText: unique })).toContainText('Rs 1,250.00');
   });
 });
 
@@ -308,10 +316,15 @@ test.describe('live orders', () => {
     // so a long-lived database has several orders called DHA-0011 and a strict
     // locator resolves to more than one. The newest is the one this test just
     // placed.
-    await page.getByRole('button', { name: order.orderNumber }).last().click();
+    // Exact: the row's overflow menu is labelled "More actions for order
+    // NNNN", and Playwright matches names by substring, so a loose query hits
+    // the menu instead of the disclosure.
+    await page.getByRole('button', { name: order.orderNumber, exact: true }).last().click();
 
     await expect(page.getByRole('heading', { name: 'Items' })).toBeVisible();
-    await expect(page.getByText('2 × Chicken Biryani')).toBeVisible();
+    // Scoped to the panel: the list itself now prints each order's items in
+    // its own column, so an unscoped query matches every row on the page.
+    await expect(page.locator('.o-detail').getByText('2× Chicken Biryani')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Totals' })).toBeVisible();
     // 450 × 2 at the seeded price.
     await expect(page.getByText('Rs 900.00').first()).toBeVisible();
@@ -349,7 +362,7 @@ test.describe('kitchen display', () => {
 
     // The stream is an optimisation; this indicator is how a cook knows whether
     // to trust the screen (plan §2.8).
-    await expect(page.locator('.kds-status').first()).toContainText(/Live|Connecting/);
+    await expect(page.locator('.kds-live').first()).toContainText(/Live|Connecting/);
   });
 
   test('offers an explicit sound control rather than failing silently', async ({ page }) => {
@@ -357,11 +370,12 @@ test.describe('kitchen display', () => {
     await page.getByRole('link', { name: 'Kitchen display' }).click();
 
     // Browsers block audio until a gesture, so a screen that never asks has no
-    // audible alert and never says so.
-    const enable = page.getByRole('button', { name: /Enable sound|Sound blocked/ });
-    await expect(enable).toBeVisible();
+    // audible alert and never says so. The control is a toggle now, named by
+    // its state, so this asserts it starts off and says so once turned on.
+    const toggle = page.getByRole('button', { name: /Sound is off/ });
+    await expect(toggle).toBeVisible();
 
-    await enable.click();
+    await toggle.click();
     await expect(page.getByText('Sound on')).toBeVisible();
   });
 
@@ -369,12 +383,14 @@ test.describe('kitchen display', () => {
     await signIn(page, OWNER);
     await page.getByRole('link', { name: 'Kitchen display' }).click();
     await selectBranch(page, 'DHA');
-    await expect(page.locator('.kds-status').first()).toContainText('Live', { timeout: 20_000 });
+    await expect(page.locator('.kds-live').first()).toContainText('Live', { timeout: 20_000 });
 
     const order = await placeOrder();
 
     // No reload: this is the outbox publisher, Redis and SSE delivering.
-    const card = page.locator('.kds-card', { hasText: order.orderNumber });
+    // .last(), because order numbers are unique per branch per business date,
+    // not for all time — an older card with the same number may still be up.
+    const card = page.locator('.kds-card', { hasText: order.orderNumber }).last();
     await expect(card).toBeVisible({ timeout: 30_000 });
     await expect(card).toContainText('2×');
     await expect(card).toContainText('Chicken Biryani');
@@ -387,28 +403,19 @@ test.describe('kitchen display', () => {
 
     const order = await placeOrder();
 
-    const inNew = page
-      .getByRole('region', { name: 'New' })
-      .locator('.kds-card', { hasText: order.orderNumber });
+    // By id, not by order number. Numbers are unique per branch per business
+    // date, so a long-lived database has four cards reading DHA-0004 and
+    // counting them proves nothing about the one this test placed.
+    const card = `.kds-card[data-order-id="${order.id}"]`;
+    const inNew = page.getByRole('region', { name: 'New' }).locator(card);
 
-    // Order numbers repeat across business dates, so a long-lived database can
-    // have an older card carrying the same number still sitting in New. The
-    // newest is the one this test just placed.
-    await expect(inNew.last()).toBeVisible({ timeout: 30_000 });
-    const before = await inNew.count();
-
-    await inNew.last().getByRole('button', { name: 'Accept' }).click();
+    await expect(inNew).toBeVisible({ timeout: 30_000 });
+    await inNew.getByRole('button', { name: 'Accept' }).click();
 
     await expect(
-      page
-        .getByRole('region', { name: 'Accepted' })
-        .locator('.kds-card', { hasText: order.orderNumber })
-        .last(),
+      page.getByRole('region', { name: 'Accepted' }).locator(card),
     ).toBeVisible({ timeout: 20_000 });
-
-    // One fewer than before rather than none at all: the assertion is that this
-    // card left the column, not that no card ever shared its number.
-    await expect(inNew).toHaveCount(before - 1);
+    await expect(inNew).toHaveCount(0);
   });
 
   test('shows a ticking timer on each card', async ({ page }) => {
@@ -435,9 +442,9 @@ test.describe('kitchen display', () => {
     await signIn(page, KITCHEN);
     await page.getByRole('link', { name: 'Kitchen display' }).click();
 
-    // Branch-scoped staff get a label, not a picker, because there is nothing
-    // to choose between (spec §7).
-    await expect(page.locator('.kds-bar .pill')).toContainText('DHA');
-    await expect(page.locator('.kds-bar select')).toHaveCount(0);
+    // Branch-scoped staff get the branch in the header, not a picker, because
+    // there is nothing to choose between (spec §7).
+    await expect(page.locator('.kds-title')).toContainText('DHA');
+    await expect(page.locator('.kds-head select')).toHaveCount(0);
   });
 });

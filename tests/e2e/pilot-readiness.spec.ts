@@ -151,7 +151,7 @@ test.describe('pilot readiness', () => {
     // dinner rush, so the number has to be visible from wherever they are.
     const link = page.getByRole('link', { name: /Conversations/ });
     await expect(link).toBeVisible();
-    await expect(link.locator('.nav-badge')).toHaveText(/[1-9]/, { timeout: 20_000 });
+    await expect(link.locator('.badge')).toHaveText(/[1-9]/, { timeout: 20_000 });
   });
 
   test('a waiting customer can be read and replied to', async ({ page }) => {
@@ -162,19 +162,20 @@ test.describe('pilot readiness', () => {
     // Waiting time is the loudest thing on the row.
     const row = page.locator('.inbox-row', { hasText: CONTACT });
     await expect(row).toBeVisible({ timeout: 20_000 });
-    await expect(row.locator('.pill')).toContainText('waiting');
+    // The wait is its own block on the row now, not a pill at the end of it.
+    await expect(row.locator('.wait')).toBeVisible();
 
     await row.click();
 
     // The thread shows what the customer said and what the bot already replied.
-    await expect(page.locator('.bubble-in').last()).toContainText('speak to a person');
-    await expect(page.locator('.bubble-out').last()).toContainText('passed this conversation');
+    await expect(page.locator('.msg-in .bubble').last()).toContainText('speak to a person');
+    await expect(page.locator('.msg-out .bubble').last()).toContainText('passed this conversation');
 
     const reply = `Sorry about that — checking now. ${randomUUID().slice(0, 6)}`;
-    await page.locator('.thread-reply textarea').fill(reply);
+    await page.locator('.composer textarea').fill(reply);
     await page.getByRole('button', { name: 'Send' }).click();
 
-    await expect(page.locator('.bubble-out').last()).toContainText(reply, { timeout: 15_000 });
+    await expect(page.locator('.msg-out .bubble').last()).toContainText(reply, { timeout: 15_000 });
   });
 
   test('handing back to the bot clears the conversation from the inbox', async ({ page }) => {
@@ -193,7 +194,9 @@ test.describe('pilot readiness', () => {
     });
 
     // Still there with the filter off — handed back, not deleted.
-    await page.getByLabel('Show all conversations').check();
+    // The box is drawn; the real input sits behind it at opacity 0. Click what a
+    // person clicks.
+    await page.locator('.inbox-list-head .check').click();
     await expect(page.locator('.inbox-row', { hasText: CONTACT })).toBeVisible({
       timeout: 15_000,
     });
@@ -206,20 +209,27 @@ test.describe('pilot readiness', () => {
 
     const newNumberId = `pn-ui-${randomUUID().slice(0, 8)}`;
 
+    // The form is behind a button now: a restaurant arriving here has a phone
+    // in their hand and no idea what a "phone number ID" is, so the steps come
+    // first and the five fields only when they ask for them.
+    await page.getByRole('button', { name: /^Connect (a WhatsApp|another) number$/ }).click();
+
     await page.getByLabel('Phone number ID').fill(newNumberId);
     await page.getByLabel('Number', { exact: true }).fill('03211234567');
     await page.getByLabel('Access token').fill('a-secret-token-value');
-    await page.getByRole('button', { name: 'Connect' }).click();
+        // Exact: Playwright matches names by substring, and "Disconnect" contains
+    // "Connect" — an inexact query here resolved to two dozen buttons.
+    await page.getByRole('button', { name: 'Connect', exact: true }).click();
 
-    const row = page.locator('tr', { hasText: newNumberId });
+    const row = page.locator('.wa-status', { hasText: newNumberId });
     await expect(row).toBeVisible({ timeout: 15_000 });
-    // Recorded as set, never shown: a settings page displaying an access token
-    // is one screenshot away from leaking it.
-    await expect(row).toContainText('Set');
+    // Recorded as stored, never shown: a settings page displaying an access
+    // token is one screenshot away from leaking it.
+    await expect(row).toContainText('Access token stored');
     await expect(page.locator('body')).not.toContainText('a-secret-token-value');
 
-    await row.getByRole('button', { name: 'Deactivate' }).click();
-    await expect(row).toContainText('inactive', { timeout: 15_000 });
+    await row.getByRole('button', { name: 'Disconnect' }).click();
+    await expect(row).toContainText('Paused', { timeout: 15_000 });
   });
 
   test('a rejected template is impossible to miss', async ({ page }) => {
@@ -258,31 +268,44 @@ test.describe('pilot readiness', () => {
     await page.goto('/settings');
 
     // Called out at the top of the page, not buried in the table.
-    await expect(page.locator('.error').first()).toContainText('rejected or paused', {
+    // Scoped to our own alert: Next renders an empty role="alert" route
+    // announcer on every page, and .first() can land on it.
+    await expect(page.locator('.alert[role="alert"]').first()).toContainText('not usable', {
       timeout: 15_000,
     });
     // And Meta's own words next to the template it refused, since that is the
     // only text that says how to fix it. Scoped to this run's template: a dev
     // database accumulates rejected ones, which is itself realistic.
-    const row = page.locator('tr', { hasText: providerName });
-    await expect(row.locator('.error-inline')).toContainText('Promotional content');
+    const row = page.locator('.tpl', { hasText: providerName });
+    await expect(row.locator('.field-error')).toContainText('Promotional content');
   });
 
   test('notification channels can be turned off and stay off', async ({ page }) => {
     await signIn(page);
     await page.goto('/settings');
 
-    const toggle = page.getByLabel('SMS for CUSTOMER');
-    await expect(toggle).toBeVisible({ timeout: 15_000 });
+    // The grid's boxes are drawn, with the real input behind at opacity 0, so
+    // the state is read from the input and the click lands on the label.
+    const cell = page
+      .locator('.ngrid tr', { hasText: 'The customer' })
+      .locator('.check')
+      .nth(1);
+    const state = () => page.getByLabel('Text message for The customer');
 
-    const wasOn = await toggle.isChecked();
-    await toggle.click();
+    await expect(state()).toHaveCount(1, { timeout: 15_000 });
+    const wasOn = await state().isChecked();
+
+    await cell.click();
     await page.waitForTimeout(500);
 
     await page.reload();
-    await expect(page.getByLabel('SMS for CUSTOMER')).toBeChecked({ checked: !wasOn });
+    await expect(state()).toBeChecked({ checked: !wasOn });
 
     // Put it back, so a re-run starts where this one did.
-    await page.getByLabel('SMS for CUSTOMER').click();
+    await page
+      .locator('.ngrid tr', { hasText: 'The customer' })
+      .locator('.check')
+      .nth(1)
+      .click();
   });
 });

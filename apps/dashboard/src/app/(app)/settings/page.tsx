@@ -299,8 +299,15 @@ export default function SettingsPage() {
                       {account.branchId
                         ? `Used by ${branches.find((b) => b.id === account.branchId)?.name ?? 'one branch'}`
                         : 'Used by every branch'}
-                      {account.hasCredentials ? '' : ' · no access token stored'}
+                      {' · '}
+                      {account.hasCredentials
+                        ? 'Access token stored'
+                        : 'No access token stored'}
                     </span>
+                    {/* The provider's own id for this number. Shown because it
+                        is the thing Meta's console and every support thread
+                        refer to; the token it is paired with is never shown. */}
+                    <span className="cap faint num">{account.phoneNumberId}</span>
                   </div>
                   <span className={account.isActive ? 'pill pill-ready' : 'pill pill-outline'}>
                     {account.isActive ? 'Connected' : 'Paused'}

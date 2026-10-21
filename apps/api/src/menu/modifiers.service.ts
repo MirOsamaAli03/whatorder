@@ -31,13 +31,40 @@ export class ModifiersService {
     private readonly audit: AuditService,
   ) {}
 
+  /**
+   * Every option group, with how many dishes use it and which.
+   *
+   * The count is not decoration. A modifier group is shared: "Spice level" is
+   * defined once and attached to fifteen dishes, so editing it edits all
+   * fifteen and deleting it removes a question from all fifteen. A screen that
+   * lets somebody change one without saying how far the change reaches is a
+   * screen that will eventually surprise them during service.
+   *
+   * The dish names come back too, capped, because "shared by 9 dishes" invites
+   * exactly one question — which nine.
+   */
   async findAll(auth: AuthContext) {
-    return this.prisma.forTenant(auth.tenantId, (tx) =>
-      tx.modifier.findMany({
-        include: { options: { orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] } },
+    return this.prisma.forTenant(auth.tenantId, async (tx) => {
+      const modifiers = await tx.modifier.findMany({
+        include: {
+          options: { orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] },
+          _count: { select: { menuItems: true } },
+          menuItems: {
+            // Enough to name a few and say "and 6 more"; not the whole menu.
+            take: 6,
+            select: { menuItem: { select: { id: true, name: true } } },
+            orderBy: { menuItem: { name: 'asc' } },
+          },
+        },
         orderBy: { name: 'asc' },
-      }),
-    );
+      });
+
+      return modifiers.map(({ _count, menuItems, ...modifier }) => ({
+        ...modifier,
+        usedByCount: _count.menuItems,
+        usedBy: menuItems.map((link) => link.menuItem),
+      }));
+    });
   }
 
   async create(auth: AuthContext, input: CreateModifierDto) {

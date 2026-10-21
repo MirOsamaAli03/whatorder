@@ -2,6 +2,7 @@
 
 import { MenuItemAvailability } from '@restaurant-os/types';
 import { useState, type FormEvent } from 'react';
+import { AlertIcon } from '@/components/icons';
 import { ApiError, api } from '@/lib/api-client';
 import type { MenuItem } from '@/lib/types';
 
@@ -93,23 +94,25 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
   }
 
   return (
-    <form className="card stack" onSubmit={(event) => void save(event)} style={{ marginBottom: 16 }}>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h2>{item ? `Edit ${item.name}` : 'New menu item'}</h2>
-        <span className="faint">Chain-wide values</span>
+    <form className="card card-pad stack" onSubmit={(event) => void save(event)} style={{ gap: 16 }}>
+      <div className="sec-head">
+        <span className="sec-title">{item ? `Edit ${item.name}` : 'New dish'}</span>
+        <span className="sec-help">Chain-wide values</span>
       </div>
 
       {error ? (
-        <div className="banner banner-error" role="alert">
-          {error}
+        <div className="alert alert-danger" role="alert">
+          <AlertIcon />
+          <div>{error}</div>
         </div>
       ) : null}
 
-      <div className="row" style={{ alignItems: 'flex-start', gap: 16 }}>
-        <div style={{ flex: '1 1 240px' }}>
+      <div className="bi">
+        <div className="stack" style={{ gap: 14 }}>
           <div className="field">
-            <label htmlFor="name">Name</label>
+            <label className="field-label" htmlFor="name">Name</label>
             <input
+              className="input"
               id="name"
               required
               value={name}
@@ -119,8 +122,10 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
           </div>
 
           <div className="field">
-            <label htmlFor="nameUrdu">Name in Urdu (optional)</label>
+            <label className="field-label" htmlFor="nameUrdu">Name in Urdu (optional)</label>
             <input
+              className="input input-ur"
+              lang="ur"
               id="nameUrdu"
               dir="rtl"
               value={nameUrdu}
@@ -129,8 +134,9 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
           </div>
 
           <div className="field">
-            <label htmlFor="category">Category</label>
+            <label className="field-label" htmlFor="category">Category</label>
             <select
+              className="select"
               id="category"
               value={categoryId}
               onChange={(event) => setCategoryId(event.target.value)}
@@ -145,10 +151,11 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
           </div>
         </div>
 
-        <div style={{ flex: '1 1 240px' }}>
+        <div className="stack" style={{ gap: 14 }}>
           <div className="field">
-            <label htmlFor="basePrice">Chain price</label>
+            <label className="field-label" htmlFor="basePrice">Chain price</label>
             <input
+              className="input"
               id="basePrice"
               // Text, not number: a number input returns a float and would
               // quietly mangle a price like 700.10.
@@ -162,13 +169,14 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
             {fieldErrors.basePrice ? (
               <p className="field-error">{fieldErrors.basePrice}</p>
             ) : (
-              <p className="faint">Two decimal places, no currency symbol or separators.</p>
+              <p className="field-hint">Two decimal places, no currency symbol or separators.</p>
             )}
           </div>
 
           <div className="field">
-            <label htmlFor="prepTime">Preparation time (minutes)</label>
+            <label className="field-label" htmlFor="prepTime">Preparation time (minutes)</label>
             <input
+              className="input"
               id="prepTime"
               type="number"
               min={0}
@@ -179,8 +187,9 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
           </div>
 
           <div className="field">
-            <label htmlFor="availability">Availability across the chain</label>
+            <label className="field-label" htmlFor="availability">Availability across the chain</label>
             <select
+              className="select"
               id="availability"
               value={availability}
               onChange={(event) => setAvailability(event.target.value as MenuItemAvailability)}
@@ -189,7 +198,7 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
               <option value={MenuItemAvailability.OUT_OF_STOCK}>Sold out</option>
               <option value={MenuItemAvailability.HIDDEN}>Hidden</option>
             </select>
-            <p className="faint">
+            <p className="field-hint">
               A branch can restrict this further, but never loosen it — an item hidden here stays
               hidden everywhere.
             </p>
@@ -198,8 +207,9 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
       </div>
 
       <div className="field">
-        <label htmlFor="description">Description (optional)</label>
+        <label className="field-label" htmlFor="description">Description (optional)</label>
         <textarea
+          className="textarea"
           id="description"
           rows={2}
           value={description}
@@ -207,7 +217,7 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
         />
       </div>
 
-      <div className="row" style={{ justifyContent: 'space-between' }}>
+      <div className="row-wrap">
         <div className="row">
           <button type="submit" className="btn btn-primary" disabled={saving}>
             {saving ? 'Saving…' : item ? 'Save changes' : 'Create item'}
@@ -216,6 +226,8 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
             Cancel
           </button>
         </div>
+
+        <span className="spacer" />
 
         {item ? (
           <button type="button" className="btn btn-danger" onClick={() => void archive()} disabled={saving}>

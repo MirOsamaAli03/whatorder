@@ -3,6 +3,7 @@
 import { MenuItemAvailability, Permission } from '@restaurant-os/types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditor } from '@/components/item-editor';
+import { MenuTabs } from '@/components/menu-tabs';
 import { AlertIcon, MenuIcon } from '@/components/icons';
 import { OverflowMenu, type OverflowAction } from '@/components/overflow-menu';
 import { ApiError, api } from '@/lib/api-client';
@@ -207,6 +208,8 @@ export default function MenuPage() {
           ) : null}
         </div>
       </div>
+
+      <MenuTabs />
 
       {error ? (
         <div className="alert alert-danger" role="alert">

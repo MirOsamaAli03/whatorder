@@ -87,7 +87,7 @@ function useDeviceSetting<T extends string>(key: string, fallback: T): [T, (next
 
 export default function KdsPage() {
   const session = useSession();
-  const { selected, loading: branchesLoading } = useBranches();
+  const { branches, selected, selectBranch, loading: branchesLoading } = useBranches();
   const { snapshot, health, error, newOrderSignal, refresh } = useKdsStream(selected?.id ?? null);
   const sound = useAlertSound();
 
@@ -193,6 +193,31 @@ export default function KdsPage() {
         </div>
 
         <div className="kds-tools">
+          {/*
+            A chain owner can still change branch from here. The design's
+            header has no picker — it was drawn for a single shop — but
+            dropping it would have meant opening another screen to look at a
+            second kitchen. Rendered only when there is a choice: a cook
+            assigned to one branch gets the name in the title and nothing to
+            fiddle with (spec §7).
+          */}
+          {branches.length > 1 ? (
+            <div className="select-wrap">
+              <select
+                className="select"
+                aria-label="Branch"
+                value={selected?.id ?? ''}
+                onChange={(event) => selectBranch(event.target.value)}
+              >
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
           <div className="seg hide-tablet-down" role="group" aria-label="Screen brightness">
             <button
               type="button"
@@ -298,7 +323,7 @@ export default function KdsPage() {
               key={column}
               id={`col-${key}`}
               className={`kds-col ${key}`}
-              aria-label={`${humanize(column)}, ${cards.length} orders`}
+              aria-label={`${humanize(column)}, ${cards.length} ${cards.length === 1 ? 'order' : 'orders'}`}
             >
               <h2 className="kds-col-head">
                 {humanize(column)} <span className="num">{cards.length}</span>
@@ -355,6 +380,12 @@ export default function KdsPage() {
                         card.isUnacknowledged ? ' is-unack' : ''
                       }`}
                       aria-label={`Order ${card.orderNumber}, ${word}`}
+                      // Order numbers are unique per branch per business date,
+                      // not for all time, so a long-lived database shows
+                      // several cards reading DHA-0004. The id is the only
+                      // thing that identifies one card; the browser tests use
+                      // it, and it costs a user nothing.
+                      data-order-id={card.id}
                     >
                       <div className="kds-timer">
                         <span className="t" role="timer">
