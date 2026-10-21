@@ -25,6 +25,17 @@ import type { Menu, MenuCategory, MenuItem, MenuVariant } from '@/lib/types';
  * else.
  */
 
+/** An option group as the library lists it. */
+interface LibraryGroup {
+  id: string;
+  name: string;
+  required: boolean;
+  minSelections: number;
+  maxSelections: number;
+  options: Array<{ id: string }>;
+  usedByCount: number;
+}
+
 /** A size being edited. `id` is absent until it has been saved once. */
 interface DraftSize {
   key: string;
@@ -49,6 +60,7 @@ export default function MenuStructurePage() {
   const { selected, loading: branchesLoading } = useBranches();
 
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [library, setLibrary] = useState<LibraryGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -70,7 +82,12 @@ export default function MenuStructurePage() {
   const load = useCallback(async () => {
     if (!selected) return;
     try {
-      setMenu(await api<Menu>(`/menu?branchId=${selected.id}&includeHidden=true`));
+      const [loaded, groups] = await Promise.all([
+        api<Menu>(`/menu?branchId=${selected.id}&includeHidden=true`),
+        api<LibraryGroup[]>('/menu/modifiers'),
+      ]);
+      setMenu(loaded);
+      setLibrary(groups);
       setError(null);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : 'Could not load the menu');
@@ -95,6 +112,11 @@ export default function MenuStructurePage() {
 
   const category = categories.find((candidate) => candidate.id === categoryId) ?? null;
   const dish = category?.items.find((item) => item.id === dishId) ?? null;
+
+  /** Library groups this dish does not already ask about. */
+  const unattached = library.filter(
+    (group) => !(dish?.modifiers ?? []).some((attached) => attached.id === group.id),
+  );
 
   /** Loads a dish into the form. Discards whatever was being typed. */
   const openDish = useCallback((item: MenuItem | null) => {
@@ -226,6 +248,24 @@ export default function MenuStructurePage() {
    * first failure, and the menu is reloaded afterwards either way, so the form
    * shows what the server actually holds rather than what was typed.
    */
+  /**
+   * Attaches or detaches an option group.
+   *
+   * One PUT carrying the whole list, which is what the API offers and is the
+   * right shape anyway: attaching is a change to the set of questions a dish
+   * asks, and a set is replaced atomically rather than edited one id at a
+   * time. Saved immediately rather than queued behind the form's Save button,
+   * because it is one call that either happens or does not — there is no
+   * half-attached state to leave somebody in.
+   */
+  async function setGroups(dishId: string, modifierIds: string[]) {
+    await run(
+      () => api(`/menu/items/${dishId}/modifiers`, { method: 'PUT', body: { modifierIds } }),
+      'Could not change the option groups on this dish',
+    );
+    await load();
+  }
+
   async function saveDish() {
     if (!dish) return;
 
@@ -713,13 +753,46 @@ export default function MenuStructurePage() {
                           · {group.options.length} option{group.options.length === 1 ? '' : 's'}
                         </span>
                       </span>
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={busy}
+                          onClick={() =>
+                            void setGroups(
+                              dish.id,
+                              dish.modifiers.filter((m) => m.id !== group.id).map((m) => m.id),
+                            )
+                          }
+                        >
+                          Detach
+                        </button>
+                      ) : null}
                     </div>
                   ))
                 )}
 
                 <div className="attach-row">
+                  {canEdit && unattached.length > 0 ? (
+                    <OverflowMenu
+                      label="Attach an option group from the library"
+                      triggerClassName="btn"
+                      actions={unattached.map((group) => ({
+                        key: group.id,
+                        label: group.name,
+                        hint: group.usedByCount > 0 ? `on ${group.usedByCount}` : 'unused',
+                        onSelect: () =>
+                          void setGroups(dish.id, [
+                            ...dish.modifiers.map((m) => m.id),
+                            group.id,
+                          ]),
+                      }))}
+                    >
+                      Attach from library
+                    </OverflowMenu>
+                  ) : null}
                   <a className="btn" href="/menu/options">
-                    Manage option groups
+                    {library.length === 0 ? 'Create an option group' : 'Manage option groups'}
                   </a>
                 </div>
               </div>

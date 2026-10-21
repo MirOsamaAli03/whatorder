@@ -32,12 +32,19 @@ export function OverflowMenu({
   label,
   actions,
   disabled,
+  triggerClassName = 'btn btn-icon btn-ghost',
   children,
 }: {
   /** The accessible name of the trigger, e.g. "More actions for order 1044". */
   label: string;
   actions: OverflowAction[];
   disabled?: boolean;
+  /**
+   * The trigger's own classes. Defaults to the icon button used in table rows;
+   * pass something else where the trigger carries a label, since `.btn-icon`
+   * is a fixed square and would clip the text.
+   */
+  triggerClassName?: string;
   /** The trigger's content. Defaults to a horizontal ellipsis. */
   children?: ReactNode;
 }) {
@@ -85,7 +92,7 @@ export function OverflowMenu({
       <button
         type="button"
         ref={trigger}
-        className="btn btn-icon btn-ghost"
+        className={triggerClassName}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
