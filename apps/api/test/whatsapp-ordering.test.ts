@@ -81,7 +81,13 @@ describe('whatsapp ordering', () => {
     ).json().data.id;
 
     friesId = (
-      await post('/api/v1/menu/items', { name: 'Fries', basePrice: '250.00', categoryId })
+      await post('/api/v1/menu/items', {
+        name: 'Fries',
+        basePrice: '250.00',
+        categoryId,
+        // One dish with an Urdu name, so the menu list can be checked for it.
+        nameLocalized: { UR: 'فرائز' },
+      })
     ).json().data.id;
 
     await post('/api/v1/notifications/whatsapp/accounts', {
@@ -194,6 +200,27 @@ describe('whatsapp ordering', () => {
   }
 
   describe('the deterministic flow (plan 2.2)', () => {
+    it('puts a dish’s Urdu name on its menu row', async () => {
+      // The restaurant has always been able to record one; until now the bot
+      // never showed it, so a customer reading in Urdu saw an English-only
+      // menu. It goes on the row's second line because the title is capped at
+      // 24 characters and already carries the number and the English name.
+      await say('menu');
+      const replies = await tap(`cat:${categoryId}`, 'Mains');
+
+      const list = replies.find((message) => message.kind === 'list');
+      const rows = list?.kind === 'list' ? list.sections.flatMap((s) => s.rows) : [];
+
+      const fries = rows.find((row) => row.title.includes('Fries'));
+      expect(fries?.description).toContain('فرائز');
+      // And the price is still there, since that is what the line was for.
+      expect(fries?.description).toContain('250.00');
+
+      // A dish with no Urdu name is unaffected.
+      const burger = rows.find((row) => row.title.includes('Chicken Burger'));
+      expect(burger?.description).toBe('PKR 450.00');
+    });
+
     it('greets a first-time customer by name of the restaurant, with buttons', async () => {
       const replies = await say('Assalam o Alaikum');
 

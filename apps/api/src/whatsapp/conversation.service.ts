@@ -18,6 +18,7 @@ import {
   addedToCartMessage,
   blockedCustomerMessage,
   browseCategoriesMessage,
+  dishRowDescription,
   askAddressMessage,
   askOrderTypeMessage,
   askQuantityMessage,
@@ -39,6 +40,7 @@ import {
   pageSlice,
   resolveIntent,
   unknownMessage,
+  urduName,
   type CartSummary,
   type ConversationContext,
   type NormalizedInput,
@@ -347,7 +349,15 @@ export class ConversationService {
                   pageSlice(categories, 0).map((category) => ({
                     id: encodeReplyId(ReplyAction.CATEGORY, category.id),
                     title: category.name,
-                    ...(category.description ? { description: category.description } : {}),
+                    // The Urdu name if there is one, since that is what a
+                    // customer reading in Urdu is looking for; otherwise
+                    // whatever description the restaurant wrote.
+                    ...(urduName(category.nameLocalized) ?? category.description
+                      ? {
+                          description:
+                            urduName(category.nameLocalized) ?? category.description ?? '',
+                        }
+                      : {}),
                   })),
                 ),
               },
@@ -361,7 +371,7 @@ export class ConversationService {
     const rows = pageSlice(items, page).map((item) => ({
       id: encodeReplyId(ReplyAction.ITEM, item.id),
       title: item.name,
-      description: `${item.currency} ${item.price}`,
+      description: dishRowDescription(item.nameLocalized, item.currency, item.price),
     }));
 
     if (hasNextPage(items.length, page)) {

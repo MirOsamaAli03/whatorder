@@ -23,6 +23,8 @@ import {
   parseReplyId,
   resolveIntent,
   unknownMessage,
+  dishRowDescription,
+  urduName,
 } from './conversation';
 
 const ALL_STATES = Object.values(ConversationState);
@@ -383,5 +385,46 @@ describe('what the customer reads', () => {
 
   it('says something sensible about a status it has no wording for', () => {
     expect(orderStatusMessage('DHA-0042', 'SOMETHING_NEW')).toContain('DHA-0042');
+  });
+});
+
+describe('Urdu names on the menu', () => {
+  it('reads the Urdu name a restaurant gave', () => {
+    expect(urduName({ UR: 'چکن تکہ' })).toBe('چکن تکہ');
+  });
+
+  it('treats anything else as absent rather than throwing', () => {
+    // `nameLocalized` is free-form JSON, so a tenant can have written anything
+    // into it. A crash here would take down the whole conversation, not just
+    // one row of the menu.
+    expect(urduName(null)).toBeNull();
+    expect(urduName(undefined)).toBeNull();
+    expect(urduName({})).toBeNull();
+    expect(urduName({ UR: '' })).toBeNull();
+    expect(urduName({ UR: '   ' })).toBeNull();
+    expect(urduName({ UR: 42 })).toBeNull();
+    expect(urduName('چکن')).toBeNull();
+    expect(urduName([{ UR: 'چکن' }])).toBeNull();
+  });
+
+  it('puts the Urdu name and the price on a dish row', () => {
+    // The title is capped at 24 characters and already carries "12. Chicken
+    // Tikka", so the Urdu goes on the second line.
+    expect(dishRowDescription({ UR: 'چکن تکہ' }, 'PKR', '650.00')).toBe('چکن تکہ · PKR 650.00');
+  });
+
+  it('is just the price when no Urdu name was given', () => {
+    expect(dishRowDescription({}, 'PKR', '650.00')).toBe('PKR 650.00');
+  });
+
+  it('stays inside the 72-character description limit WhatsApp enforces', () => {
+    // A row the provider rejects means the customer sees no menu at all, so
+    // the realistic worst case is worth pinning down.
+    const long = dishRowDescription(
+      { UR: 'مرغ مکھنی خاص دیگی ہانڈی' },
+      'PKR',
+      '12,500.00',
+    );
+    expect(long.length).toBeLessThanOrEqual(72);
   });
 });

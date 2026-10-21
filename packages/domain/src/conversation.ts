@@ -533,6 +533,38 @@ export function greetingMessage(restaurantName: string, customerName?: string | 
 }
 
 /**
+ * The Urdu name a restaurant has given something, if any.
+ *
+ * `nameLocalized` is a free-form JSON column, so it arrives as `unknown` and
+ * has to be narrowed rather than trusted: a tenant could have written anything
+ * into it, and a crash in the menu would take the whole conversation down.
+ */
+export function urduName(nameLocalized: unknown): string | null {
+  if (!nameLocalized || typeof nameLocalized !== 'object') return null;
+  const value = (nameLocalized as Record<string, unknown>).UR;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * The second line of a dish's row: its Urdu name and its price.
+ *
+ * The Urdu goes here rather than in the title because a WhatsApp list row
+ * title is 24 characters and already carries "12. Chicken Tikka"; the
+ * description has 72. So a customer sees the English name they tap and the
+ * Urdu name underneath, which is the way round a bilingual menu is usually
+ * printed anyway.
+ */
+export function dishRowDescription(
+  nameLocalized: unknown,
+  currency: string,
+  price: string,
+): string {
+  const urdu = urduName(nameLocalized);
+  const money = `${currency} ${price}`;
+  return urdu ? `${urdu} · ${money}` : money;
+}
+
+/**
  * The menu's top level: pick a section.
  *
  * Here rather than in the conversation service because the dashboard shows a
