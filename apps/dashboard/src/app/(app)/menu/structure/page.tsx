@@ -1,8 +1,10 @@
 'use client';
 
 import { Permission } from '@restaurant-os/types';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertIcon, CheckIcon, MenuIcon } from '@/components/icons';
+import { AlertIcon, BackIcon, CheckIcon, MenuIcon } from '@/components/icons';
+import { Ask, Confirm } from '@/components/ask';
 import { MenuOnboarding } from '@/components/menu-onboarding';
 import { MenuTabs } from '@/components/menu-tabs';
 import { OverflowMenu } from '@/components/overflow-menu';
@@ -67,6 +69,14 @@ export default function MenuStructurePage() {
   const [busy, setBusy] = useState(false);
 
   const [categoryId, setCategoryId] = useState<string | null>(null);
+  /** Which dialog is open, if any. Replaces window.prompt / window.confirm. */
+  const [asking, setAsking] = useState<
+    | { kind: 'add-category' }
+    | { kind: 'rename-category'; target: MenuCategory }
+    | { kind: 'delete-category'; target: MenuCategory }
+    | { kind: 'add-dish' }
+    | null
+  >(null);
   const [dishId, setDishId] = useState<string | null>(null);
 
   // The dish form, held apart from the loaded menu so a half-typed name is not
@@ -142,15 +152,16 @@ export default function MenuStructurePage() {
     }
   }
 
-  async function addCategory() {
-    const entered = window.prompt('What is this section called? For example, BBQ or Karahi.');
-    if (!entered?.trim()) return;
-
+  async function addCategory(name: string, nameUrdu: string) {
     const created = await run(
       () =>
         api<MenuCategory>('/menu/categories', {
           method: 'POST',
-          body: { name: entered.trim(), sortOrder: categories.length },
+          body: {
+            name,
+            sortOrder: categories.length,
+            ...(nameUrdu ? { nameLocalized: { UR: nameUrdu } } : {}),
+          },
         }),
       'Could not add that section',
     );
@@ -160,20 +171,12 @@ export default function MenuStructurePage() {
     }
   }
 
-  async function renameCategory(target: MenuCategory) {
-    const entered = window.prompt('Rename this section', target.name);
-    if (entered === null || !entered.trim()) return;
-
-    const urdu = window.prompt('Name in Urdu (optional)', target.nameLocalized?.UR ?? '');
-
+  async function renameCategory(target: MenuCategory, name: string, nameUrdu: string) {
     await run(
       () =>
         api(`/menu/categories/${target.id}`, {
           method: 'PATCH',
-          body: {
-            name: entered.trim(),
-            ...(urdu !== null ? { nameLocalized: urdu.trim() ? { UR: urdu.trim() } : {} } : {}),
-          },
+          body: { name, nameLocalized: nameUrdu ? { UR: nameUrdu } : {} },
         }),
       'Could not rename that section',
     );
@@ -181,13 +184,6 @@ export default function MenuStructurePage() {
   }
 
   async function deleteCategory(target: MenuCategory) {
-    const count = target.items.length;
-    const warning =
-      count > 0
-        ? `Delete "${target.name}"? It has ${count} dish${count === 1 ? '' : 'es'} in it.`
-        : `Delete "${target.name}"?`;
-    if (!window.confirm(warning)) return;
-
     await run(
       () => api(`/menu/categories/${target.id}`, { method: 'DELETE' }),
       'Could not delete that section',
@@ -221,16 +217,19 @@ export default function MenuStructurePage() {
     await load();
   }
 
-  async function addDish() {
+  async function addDish(name: string, nameUrdu: string) {
     if (!category) return;
-    const entered = window.prompt(`Add a dish to ${category.name}`);
-    if (!entered?.trim()) return;
 
     const created = await run(
       () =>
         api<MenuItem>('/menu/items', {
           method: 'POST',
-          body: { name: entered.trim(), basePrice: '0.00', categoryId: category.id },
+          body: {
+            name,
+            basePrice: '0.00',
+            categoryId: category.id,
+            ...(nameUrdu ? { nameLocalized: { UR: nameUrdu } } : {}),
+          },
         }),
       'Could not add that dish',
     );
@@ -329,6 +328,15 @@ export default function MenuStructurePage() {
     );
   }
 
+  /**
+   * Which pane a phone shows.
+   *
+   * Below 600px the design shows one pane at a time — three columns on a
+   * 390px screen is three unusable columns — so the deepest thing chosen wins
+   * and the back buttons walk out of it.
+   */
+  const pane: 'cats' | 'dishes' | 'edit' = dish ? 'edit' : categoryId ? 'dishes' : 'cats';
+
   const dishCount = categories.reduce((total, c) => total + c.items.length, 0);
   const onboarding = categories.length === 0 && canCreate;
 
@@ -350,6 +358,80 @@ export default function MenuStructurePage() {
           menu exists, and building one from nothing is its longest job. */}
       {onboarding ? <MenuOnboarding onDone={() => void load()} /> : null}
 
+      {asking?.kind === 'add-category' ? (
+        <Ask
+          title="Add a section"
+          description="A section is a heading customers scroll past on WhatsApp — BBQ, Karahi, Drinks."
+          confirmLabel="Add section"
+          fields={[
+            { key: 'name', label: 'Name', required: true, placeholder: 'BBQ' },
+            { key: 'urdu', label: 'Name in Urdu (optional)', urdu: true },
+          ]}
+          onCancel={() => setAsking(null)}
+          onSubmit={(values) => {
+            setAsking(null);
+            void addCategory(values.name ?? '', values.urdu ?? '');
+          }}
+        />
+      ) : null}
+
+      {asking?.kind === 'rename-category' ? (
+        <Ask
+          title={`Rename ${asking.target.name}`}
+          description="Both names appear on WhatsApp."
+          fields={[
+            { key: 'name', label: 'Name', required: true, value: asking.target.name },
+            {
+              key: 'urdu',
+              label: 'Name in Urdu (optional)',
+              urdu: true,
+              value: asking.target.nameLocalized?.UR ?? '',
+            },
+          ]}
+          onCancel={() => setAsking(null)}
+          onSubmit={(values) => {
+            const target = asking.target;
+            setAsking(null);
+            void renameCategory(target, values.name ?? '', values.urdu ?? '');
+          }}
+        />
+      ) : null}
+
+      {asking?.kind === 'delete-category' ? (
+        <Confirm
+          title={`Delete ${asking.target.name}?`}
+          body={
+            asking.target.items.length > 0
+              ? `It has ${asking.target.items.length} dish${asking.target.items.length === 1 ? '' : 'es'} in it, which customers will stop seeing on WhatsApp.`
+              : 'It has no dishes in it.'
+          }
+          confirmLabel="Delete section"
+          onCancel={() => setAsking(null)}
+          onConfirm={() => {
+            const target = asking.target;
+            setAsking(null);
+            void deleteCategory(target);
+          }}
+        />
+      ) : null}
+
+      {asking?.kind === 'add-dish' && category ? (
+        <Ask
+          title={`Add a dish to ${category.name}`}
+          description="You can set its price, sizes and choices next."
+          confirmLabel="Add dish"
+          fields={[
+            { key: 'name', label: 'Name', required: true, placeholder: 'Chicken Tikka' },
+            { key: 'urdu', label: 'Name in Urdu (optional)', urdu: true },
+          ]}
+          onCancel={() => setAsking(null)}
+          onSubmit={(values) => {
+            setAsking(null);
+            void addDish(values.name ?? '', values.urdu ?? '');
+          }}
+        />
+      ) : null}
+
       {error ? (
         <div className="alert alert-danger" role="alert">
           <AlertIcon />
@@ -363,14 +445,14 @@ export default function MenuStructurePage() {
           result. */}
       {onboarding ? null : (
       <div className="ed">
-        <section className="ed-pane" aria-label="Categories">
+        <section className={`ed-pane ed-cats${pane === 'cats' ? ' is-focus' : ''}`} aria-label="Categories">
           <div className="pane-head">
             <span className="pane-title">
               Categories
               <small>Same order as on WhatsApp</small>
             </span>
             {canCreate ? (
-              <button type="button" className="btn btn-sm" onClick={() => void addCategory()}>
+              <button type="button" className="btn btn-sm" onClick={() => setAsking({ kind: 'add-category' })}>
                 Add
               </button>
             ) : null}
@@ -437,13 +519,13 @@ export default function MenuStructurePage() {
                         {
                           key: 'rename',
                           label: 'Rename',
-                          onSelect: () => void renameCategory(candidate),
+                          onSelect: () => setAsking({ kind: 'rename-category', target: candidate }),
                         },
                         {
                           key: 'delete',
                           label: 'Delete',
                           danger: true,
-                          onSelect: () => void deleteCategory(candidate),
+                          onSelect: () => setAsking({ kind: 'delete-category', target: candidate }),
                         },
                       ]
                     : []
@@ -453,8 +535,16 @@ export default function MenuStructurePage() {
           ))}
         </section>
 
-        <section className="ed-pane" aria-label="Dishes">
+        <section className={`ed-pane ed-dishes${pane === 'dishes' ? ' is-focus' : ''}`} aria-label="Dishes">
           <div className="pane-head">
+            <button
+              type="button"
+              className="btn btn-icon btn-ghost pane-back"
+              aria-label="Back to the sections"
+              onClick={() => setCategoryId(null)}
+            >
+              <BackIcon />
+            </button>
             <span className="pane-title">
               {category?.name ?? 'Dishes'}
               <small>
@@ -462,7 +552,7 @@ export default function MenuStructurePage() {
               </small>
             </span>
             {canCreate && category ? (
-              <button type="button" className="btn btn-sm" onClick={() => void addDish()}>
+              <button type="button" className="btn btn-sm" onClick={() => setAsking({ kind: 'add-dish' })}>
                 Dish
               </button>
             ) : null}
@@ -516,7 +606,7 @@ export default function MenuStructurePage() {
           {category && category.items.length === 0 ? (
             <div className="pane-body">
               {canCreate ? (
-                <button type="button" className="add-row" onClick={() => void addDish()}>
+                <button type="button" className="add-row" onClick={() => setAsking({ kind: 'add-dish' })}>
                   + Add a dish to {category.name}
                 </button>
               ) : (
@@ -526,7 +616,7 @@ export default function MenuStructurePage() {
           ) : null}
         </section>
 
-        <section className="ed-pane" aria-label="Dish">
+        <section className={`ed-pane ed-edit${pane === 'edit' ? ' is-focus' : ''}`} aria-label="Dish">
           {!dish ? (
             <div className="empty" style={{ padding: '56px 24px' }}>
               <div className="empty-icon" aria-hidden="true">
@@ -543,6 +633,14 @@ export default function MenuStructurePage() {
           ) : (
             <>
               <div className="pane-head">
+                <button
+                  type="button"
+                  className="btn btn-icon btn-ghost pane-back"
+                  aria-label={`Back to the dishes in ${category?.name ?? 'this section'}`}
+                  onClick={() => openDish(null)}
+                >
+                  <BackIcon />
+                </button>
                 <span className="pane-title">
                   {dish.name}
                   <small>In {category?.name}</small>
@@ -626,7 +724,7 @@ export default function MenuStructurePage() {
                   {sizes.map((size, index) => (
                     <div key={size.key} className="vrow">
                       <input
-                        className="input"
+                        className="input c-name"
                         aria-label={`Name of size ${index + 1}`}
                         placeholder="Half, Large…"
                         value={size.name}
@@ -641,7 +739,7 @@ export default function MenuStructurePage() {
                         }}
                       />
                       <input
-                        className="input num"
+                        className="input num c-price"
                         aria-label={`Price of ${size.name || `size ${index + 1}`}`}
                         inputMode="decimal"
                         placeholder="1250.00"
@@ -656,7 +754,7 @@ export default function MenuStructurePage() {
                           setDirty(true);
                         }}
                       />
-                      <label className="radio">
+                      <label className="radio c-default">
                         <input
                           type="radio"
                           name="default-size"
@@ -676,7 +774,7 @@ export default function MenuStructurePage() {
                       </label>
                       <button
                         type="button"
-                        className="btn btn-icon btn-ghost"
+                        className="btn btn-icon btn-ghost c-del"
                         aria-label={`Remove ${size.name || `size ${index + 1}`}`}
                         disabled={!canEdit}
                         onClick={() => {
@@ -802,9 +900,14 @@ export default function MenuStructurePage() {
                       Attach from library
                     </OverflowMenu>
                   ) : null}
-                  <a className="btn" href="/menu/options">
+                  {/* Link, not <a>. A bare href reloads the whole document,
+                      which throws away the in-memory access token and makes
+                      the page refresh the session on every navigation —
+                      rotating the refresh token each time and, when a poll was
+                      already in flight, signing the user out. */}
+                  <Link className="btn" href="/menu/options">
                     {library.length === 0 ? 'Create an option group' : 'Manage option groups'}
-                  </a>
+                  </Link>
                 </div>
               </div>
 

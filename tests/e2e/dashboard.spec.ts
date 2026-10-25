@@ -321,6 +321,10 @@ test.describe('live orders', () => {
     // the menu instead of the disclosure.
     await page.getByRole('button', { name: order.orderNumber, exact: true }).last().click();
 
+    // Wait for the panel itself first. The list behind it polls every ten
+    // seconds, so asserting on its contents straight after the click races
+    // that re-render — which is why this passed alone and failed in a run.
+    await expect(page.locator('.o-detail')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Items' })).toBeVisible();
     // Scoped to the panel: the list itself now prints each order's items in
     // its own column, so an unscoped query matches every row on the page.

@@ -52,6 +52,14 @@ export interface OrganizationChoice {
   organizations: Array<{ id: string; name: string; slug: string; type: string }>;
 }
 
+/**
+ * How long a just-rotated refresh token keeps working.
+ *
+ * Long enough to cover two requests that started at the same moment; far too
+ * short to be a useful window for a stolen token.
+ */
+const REFRESH_ROTATION_GRACE_MS = 30_000;
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -248,6 +256,35 @@ export class AuthService {
     }
 
     if (session.revokedAt) {
+      /**
+       * A rotated token presented again, moments later, is almost always a
+       * race rather than a theft.
+       *
+       * Rotation revokes the old session the instant a new one is issued, so
+       * two refreshes that start before either finishes — a poll and a page
+       * load firing together, a flaky connection retried by the browser —
+       * leave the second holding a cookie that was valid when it was read and
+       * revoked by the time it arrived. Treating that as theft logs the user
+       * out of everything, which is what was happening: a tap on a link could
+       * end the session.
+       *
+       * So a short grace window. Inside it, a token revoked by ROTATION is
+       * allowed through and a fresh session is issued; outside it, or for a
+       * session revoked for any other reason, the chain is still torn down.
+       * The cost is that a stolen token also works for those few seconds — the
+       * same trade every rotating-refresh implementation makes, because the
+       * alternative is a product that signs people out at random.
+       */
+      const rotatedRecently =
+        session.revokedReason === 'ROTATED' &&
+        Date.now() - session.revokedAt.getTime() <= REFRESH_ROTATION_GRACE_MS;
+
+      if (rotatedRecently) {
+        this.logger.warn(
+          { userId: session.userId, sessionId: session.id },
+          'Refresh arrived for a just-rotated session; treating as a race, not reuse',
+        );
+      } else {
       await this.revokeChain(session.userId, session.tenantId, 'REFRESH_TOKEN_REUSED');
       this.logger.warn(
         { userId: session.userId, sessionId: session.id },
@@ -258,6 +295,7 @@ export class AuthService {
         'This session has been revoked. Please sign in again.',
         401,
       );
+      }
     }
 
     if (session.expiresAt <= new Date()) {

@@ -1221,7 +1221,12 @@ a { color: var(--accent-text); text-underline-offset: 3px; }
    considerably more code. */
 .sort-row { grid-template-columns: minmax(0, 1fr) auto auto; padding-left: 12px; }
 .dish-mini { grid-template-columns: 44px minmax(0, 1fr) auto; padding-left: 12px; }
-.vrow { grid-template-columns: minmax(0, 1fr) 130px 104px 44px; padding-left: 8px; }
+/* Only above the point where the design re-lays these rows out itself. These
+   rules sit at the end of the file, so unscoped they would win on source order
+   and undo the narrow-width layout. */
+@media (min-width: 1024px) {
+  .vrow { grid-template-columns: minmax(0, 1fr) 130px 104px 44px; padding-left: 8px; }
+}
 
 /* The onboarding's category chips wrap instead of scrolling.
    `.chips` is a horizontal scroller, which is right for a filter bar where the
@@ -1229,3 +1234,44 @@ a { color: var(--accent-text); text-underline-offset: 3px; }
    choices to tick — one of them being off-screen means it is never picked —
    so here they wrap and all nine stay visible. */
 .onb .chips { flex-wrap: wrap; overflow: visible; }
+
+/* --- fixes for things the design drew but did not have to run ------------ */
+
+/* A scrim has to cover the window, not its nearest positioned ancestor.
+   `.scrim` is absolute, which is fine on a design canvas and wrong for a
+   modal: scrolled down a long menu, the dialog opened above the fold. */
+.scrim.is-fixed { position: fixed; z-index: 100; overflow: auto; }
+.dialog.is-wide { max-width: 760px; }
+@media (max-height: 760px) {
+  .scrim.is-fixed { place-items: start center; }
+  .scrim.is-fixed .dialog { margin: var(--sp-4) 0; }
+}
+
+/* The overflow menu is positioned in viewport coordinates by the component,
+   because every pane it opens inside clips its own overflow to keep its
+   corners. `right: 0` would fight the measured `left`. */
+.menu-pop.is-fixed { position: fixed; right: auto; }
+
+/* These rows lost their drag handle, so they need their own narrow layout.
+   The design's rule assumes a 32px grip in the first column and reflows the
+   remaining cells around it; without the grip the cells land in the wrong
+   columns and the row goes down the page — the name squeezed into 32px, the
+   delete button on a line of its own. Below the point where a row fits on one
+   line, the name and the delete share the top line and the rest wraps under. */
+@media (max-width: 1023px) {
+  .vrow { grid-template-columns: minmax(0, 1fr) 44px; row-gap: 8px; align-items: center; }
+  .vrow .c-name { grid-column: 1; grid-row: 1; }
+  .vrow .c-del { grid-column: 2; grid-row: 1; }
+  .vrow .c-price, .vrow .c-default, .vrow .c-avail { grid-column: 1 / -1; }
+  .vrow.head { display: none; }
+}
+
+/* An attached option group, on a narrow pane.
+   `.gcard` is a four-column grid whose third column holds the name and rule;
+   squeezed, the words broke one per line and the Detach button sat on top of
+   them. The button drops to its own line instead. */
+@media (max-width: 1365px) {
+  .gcard { grid-template-columns: 44px minmax(0, 1fr); row-gap: 10px; }
+  .gcard > :first-child { display: none; }
+  .gcard > :last-child { grid-column: 1 / -1; justify-self: start; }
+}

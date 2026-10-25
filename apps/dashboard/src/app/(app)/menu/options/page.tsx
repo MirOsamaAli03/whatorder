@@ -335,7 +335,7 @@ export default function OptionGroupsPage() {
       ) : null}
 
       <div className="lib">
-        <section className="ed-pane" aria-label="Option groups">
+        <section className="ed-pane lib-list" aria-label="Option groups">
           <div className="pane-head">
             <span className="pane-title">
               Library
@@ -573,7 +573,7 @@ export default function OptionGroupsPage() {
                   {options.map((option, index) => (
                     <div key={option.id} className="vrow">
                       <input
-                        className="input"
+                        className="input c-name"
                         aria-label={`Name of option ${index + 1}`}
                         value={option.name}
                         disabled={!canEdit}
@@ -587,7 +587,7 @@ export default function OptionGroupsPage() {
                         }}
                       />
                       <input
-                        className="input num"
+                        className="input num c-price"
                         aria-label={`Price change for ${option.name || `option ${index + 1}`}`}
                         inputMode="decimal"
                         value={option.priceDelta}
@@ -603,7 +603,7 @@ export default function OptionGroupsPage() {
                           setDirty(true);
                         }}
                       />
-                      <label className="switch">
+                      <label className="switch c-avail">
                         <input
                           type="checkbox"
                           role="switch"
@@ -629,7 +629,7 @@ export default function OptionGroupsPage() {
                       </label>
                       <button
                         type="button"
-                        className="btn btn-icon btn-ghost"
+                        className="btn btn-icon btn-ghost c-del"
                         aria-label={`Remove ${option.name || `option ${index + 1}`}`}
                         disabled={!canEdit}
                         onClick={() => {
@@ -733,7 +733,7 @@ export default function OptionGroupsPage() {
           )}
         </section>
 
-        <section className="ed-pane hide-tablet-down" aria-label="What the customer sees">
+        <section className="ed-pane preview hide-tablet-down" aria-label="What the customer sees">
           <div className="pane-head">
             <span className="pane-title">
               Customer sees on WhatsApp

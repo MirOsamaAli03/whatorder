@@ -163,7 +163,18 @@ describe('authentication', () => {
       expect(String(response.headers['set-cookie'])).toContain('ros_refresh=');
     });
 
-    it('revokes the whole chain when a rotated token is replayed', async () => {
+    /**
+     * Rotation has two indistinguishable causes, and they need opposite
+     * answers.
+     *
+     * A refresh token presented twice is either a thief replaying a stolen
+     * one, or two of the user's own requests that started before either
+     * finished — a poll and a page load firing together, or two tabs waking
+     * at once. Treating every replay as theft signed people out at random;
+     * treating none as theft gives a stolen token unlimited life. So the
+     * answer is time: within seconds it is a race, after that it is theft.
+     */
+    it('lets a just-rotated token through, because that is a race not a theft', async () => {
       const { cookie } = await loginRaw(tenant.users.owner!.email);
 
       const first = await context.app.inject({
@@ -174,7 +185,45 @@ describe('authentication', () => {
       });
       expect(first.statusCode).toBe(200);
 
-      // Replaying the original token is the signature of a stolen credential.
+      const immediateReplay = await context.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/refresh',
+        headers: { cookie },
+        payload: {},
+      });
+
+      expect(immediateReplay.statusCode).toBe(200);
+
+      // And crucially the session the first refresh handed out still works —
+      // the user is not signed out of the tab that won the race.
+      const rotatedCookie = String(first.headers['set-cookie']).split(';')[0]!;
+      const stillAlive = await context.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/refresh',
+        headers: { cookie: rotatedCookie },
+        payload: {},
+      });
+      expect(stillAlive.statusCode).toBe(200);
+    });
+
+    it('revokes the whole chain when a rotated token is replayed later', async () => {
+      const { cookie } = await loginRaw(tenant.users.owner!.email);
+
+      const first = await context.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/refresh',
+        headers: { cookie },
+        payload: {},
+      });
+      expect(first.statusCode).toBe(200);
+
+      // Age the rotation past the grace window. A replay this late cannot be
+      // two requests racing; it is a credential somebody kept.
+      await context.admin.session.updateMany({
+        where: { revokedReason: 'ROTATED', userId: tenant.users.owner!.userId },
+        data: { revokedAt: new Date(Date.now() - 5 * 60_000) },
+      });
+
       const replay = await context.app.inject({
         method: 'POST',
         url: '/api/v1/auth/refresh',
@@ -185,9 +234,9 @@ describe('authentication', () => {
       expect(replay.statusCode).toBe(401);
       expect(replay.json().error.code).toBe('SESSION_REVOKED');
 
-      // And the token the attacker's victim received is dead too, so the
-      // legitimate user is forced to sign in again rather than sharing a
-      // session with whoever stole it.
+      // And the token the victim received is dead too, so the legitimate user
+      // is forced to sign in again rather than sharing a session with whoever
+      // stole it.
       const rotatedCookie = String(first.headers['set-cookie']).split(';')[0]!;
       const afterBreach = await context.app.inject({
         method: 'POST',

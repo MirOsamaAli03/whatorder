@@ -49,11 +49,47 @@ export function OverflowMenu({
   children?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  /**
+   * Where to draw the popup, in viewport coordinates.
+   *
+   * Fixed rather than absolute, because every pane this menu appears in has
+   * `overflow: hidden` to keep its corners rounded — which clipped the popup
+   * to the row it belonged to. Measuring also lets it flip above the trigger
+   * near the bottom of the window instead of opening off-screen.
+   */
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setAt(null);
+      return;
+    }
+
+    const place = () => {
+      const button = trigger.current?.getBoundingClientRect();
+      const popup = wrap.current?.querySelector<HTMLElement>('.menu-pop');
+      if (!button) return;
+
+      const height = popup?.offsetHeight ?? 0;
+      const width = popup?.offsetWidth ?? 232;
+      const room = window.innerHeight - button.bottom;
+
+      setAt({
+        // Above the trigger when there is not room below for the whole menu.
+        top: height > 0 && room < height + 12 ? button.top - height - 6 : button.bottom + 6,
+        // Right-aligned to the trigger, nudged back inside the window.
+        left: Math.max(8, Math.min(button.right - width, window.innerWidth - width - 8)),
+      });
+    };
+
+    place();
+    // Again once it has been measured, since the first pass has no height yet.
+    const frame = requestAnimationFrame(place);
+
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
 
     const onPointerDown = (event: PointerEvent) => {
       if (!wrap.current?.contains(event.target as Node)) setOpen(false);
@@ -71,6 +107,9 @@ export function OverflowMenu({
     document.addEventListener('keydown', onKeyDown);
 
     return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
@@ -103,7 +142,13 @@ export function OverflowMenu({
       </button>
 
       {open ? (
-        <div className="menu-pop" role="menu" aria-label={label}>
+        <div
+          className="menu-pop is-fixed"
+          role="menu"
+          aria-label={label}
+          // Hidden until measured, so it never flashes in the wrong place.
+          style={at ? { top: at.top, left: at.left } : { visibility: 'hidden' }}
+        >
           {actions.map((action) => (
             <button
               key={action.key}

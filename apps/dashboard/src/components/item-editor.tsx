@@ -94,7 +94,7 @@ export function ItemEditor({ item, categories, onClose, onSaved }: Props) {
   }
 
   return (
-    <form className="card card-pad stack" onSubmit={(event) => void save(event)} style={{ gap: 16 }}>
+    <form className="stack" onSubmit={(event) => void save(event)} style={{ gap: 16 }}>
       <div className="sec-head">
         <span className="sec-title">{item ? `Edit ${item.name}` : 'New dish'}</span>
         <span className="sec-help">Chain-wide values</span>

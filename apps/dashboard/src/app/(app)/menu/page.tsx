@@ -3,6 +3,7 @@
 import { MenuItemAvailability, Permission } from '@restaurant-os/types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditor } from '@/components/item-editor';
+import { Modal } from '@/components/modal';
 import { MenuTabs } from '@/components/menu-tabs';
 import { AlertIcon, MenuIcon } from '@/components/icons';
 import { OverflowMenu, type OverflowAction } from '@/components/overflow-menu';
@@ -219,17 +220,28 @@ export default function MenuPage() {
       ) : null}
 
       {editing ? (
-        <ItemEditor
-          item={editing === 'new' ? null : editing}
-          categories={sections
-            .filter((section) => section.id !== 'uncategorized')
-            .map((section) => ({ id: section.id, name: section.name }))}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            void load();
-          }}
-        />
+        <Modal title={editing === 'new' ? 'New dish' : `Edit ${editing.name}`} onClose={() => setEditing(null)} wide>
+          <ItemEditor
+            /*
+             * Keyed on the dish, so switching from one to another remounts the
+             * form instead of keeping the previous dish's values in it. Without
+             * this the fields are initialised once and never again: opening
+             * Chicken Tikka and then Beef Seekh Kebab showed the kebab's title
+             * above Chicken Tikka's name and price, and saving would have
+             * written one dish's details onto the other.
+             */
+            key={editing === 'new' ? 'new' : editing.id}
+            item={editing === 'new' ? null : editing}
+            categories={sections
+              .filter((section) => section.id !== 'uncategorized')
+              .map((section) => ({ id: section.id, name: section.name }))}
+            onClose={() => setEditing(null)}
+            onSaved={() => {
+              setEditing(null);
+              void load();
+            }}
+          />
+        </Modal>
       ) : null}
 
       {sections.length > 0 ? (
